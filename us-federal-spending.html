@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Follow the Money — U.S. Federal Spending Dossier</title>
+<!--
+  FOLLOW THE MONEY · U.S. FEDERAL SPENDING DOSSIER
+  =================================================
+  A self-contained tool that pools data from USAspending.gov by query and builds a
+  high-level + detailed funding dossier: who is paid, what is committed vs paid vs
+  still-to-be-paid, by industry (NAICS), by agency down to the contracting office,
+  competed vs sole-source, and a drill-down to each award's solicitation (RFP).
+
+  Data: USAspending.gov public API (https://api.usaspending.gov) — free, no key, CORS-open.
+  Everything runs client-side in the browser, so it embeds anywhere.
+
+  EMBED:  <iframe src="follow-the-money-usa.html" style="width:100%;height:2000px;border:0"></iframe>
+  Chart.js is loaded from a CDN.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#F4EEE1; --panel:#FBF7EE; --panel2:#F0E7D4; --border:#d8cab0;
+    --text:#1C1813; --muted:#6f6151; --line:rgba(28,24,19,.10);
+    --hum:#BE4A1F;   /* burnt orange accent (kicker, primary) */
+    --obl:#1B5A50;   /* obligated / committed (deep teal) */
+    --paid:#0a7a2a;  /* outlays / paid (green) */
+    --unpaid:#B5872C;/* committed but unpaid (gold) */
+    --sole:#b30000;  /* sole-source (brand red) */
+    --gold:#B5872C;
+    --serif:'Fraunces',Georgia,serif;
+    --mono:'Spline Sans Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       line-height:1.55;font-size:15px}
+  a{color:var(--obl);text-decoration:none} a:hover{text-decoration:underline}
+  header.app{padding:30px 20px 24px;text-align:center;border-bottom:1px solid var(--border);background:var(--bg);position:relative}
+  header.app::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,var(--hum),var(--gold) 55%,var(--obl))}
+  header.app .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--hum);font-weight:600}
+  header.app h1{font-family:var(--serif);font-weight:900;margin:8px 0 0;font-size:clamp(28px,5vw,46px);letter-spacing:-.02em;color:var(--text)}
+  header.app h1 .em{color:var(--hum)}
+  header.app p{font-family:var(--serif);font-style:italic;margin:12px auto 0;color:#4f4536;font-size:clamp(15px,2vw,18px);max-width:700px}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px}
+  /* search */
+  .search{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;
+       color:var(--muted);margin-bottom:5px;font-weight:700}
+  .field input,.field select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);
+       background:var(--panel2);color:var(--text);font-size:14px}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--obl)}
+  .cats{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  .cats label{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);
+       padding:6px 11px;border-radius:20px;font-size:13px;cursor:pointer;border:1px solid var(--border)}
+  .cats input{accent-color:var(--paid)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+  button{cursor:pointer;font-size:14px;font-weight:600;border-radius:8px;padding:10px 18px;
+       border:1px solid var(--border);background:var(--panel2);color:var(--text);transition:.12s}
+  button:hover{border-color:var(--obl)}
+  button.primary{background:var(--paid);color:#06210d;border-color:var(--paid)}
+  button.ghost{background:transparent;font-weight:500}
+  .hint{color:var(--muted);font-size:12.5px}
+  #status{margin:18px 0;min-height:22px;font-size:14px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--border);
+       border-top-color:var(--paid);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{color:var(--sole)}
+  /* report */
+  #report{display:none}
+  .lede{font-size:16px;color:var(--text);background:var(--panel);border:1px solid var(--border);
+       border-left:4px solid var(--gold);border-radius:10px;padding:14px 18px;margin:6px 0 22px}
+  .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:8px 0 22px}
+  .tab{padding:10px 14px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);border-radius:0;font-weight:600}
+  .tab.active{color:var(--text);border-bottom-color:var(--paid)}
+  .panel{display:none} .panel.active{display:block}
+  .sect-title{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--gold);margin:4px 0 12px;font-weight:700}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;position:relative;overflow:hidden}
+  .card .k{font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  .card .v{font-size:24px;font-weight:800;margin-top:6px}
+  .card .s{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .card .bar{position:absolute;left:0;bottom:0;height:3px}
+  .chartbox{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:22px}
+  .chartbox h3{margin:0 0 4px;font-size:16px} .chartbox .sub{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+  .canvas-h{position:relative;height:340px}
+  .canvas-sm{position:relative;height:280px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.two{grid-template-columns:1fr}}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:var(--panel2)}
+  .pill{font-size:11px;padding:2px 8px;border-radius:10px;white-space:nowrap}
+  .pill.comp{background:rgba(63,185,80,.16);color:var(--paid)}
+  .pill.sole{background:rgba(248,81,73,.16);color:var(--sole)}
+  .pill.unk{background:rgba(147,161,177,.16);color:var(--muted)}
+  .paidbar{height:7px;border-radius:4px;background:var(--panel2);overflow:hidden;min-width:70px}
+  .paidbar i{display:block;height:100%;background:var(--paid)}
+  .exp{cursor:pointer;color:var(--obl);font-weight:600;user-select:none}
+  .detail{background:var(--panel2);border-radius:8px;padding:12px 14px;margin-top:6px;font-size:13px}
+  .detail dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0}
+  .detail dt{color:var(--muted)} .detail dd{margin:0}
+  /* flags */
+  .flag{border-radius:10px;padding:14px 16px;margin-bottom:12px;border:1px solid var(--border);background:var(--panel)}
+  .flag.high{border-left:4px solid var(--sole)} .flag.med{border-left:4px solid var(--unpaid)} .flag.low{border-left:4px solid var(--obl)}
+  .flag .ft{font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .flag .sev{font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:10px}
+  .sev.high{background:rgba(248,81,73,.15);color:var(--sole)}
+  .sev.med{background:rgba(210,153,34,.15);color:var(--unpaid)}
+  .sev.low{background:rgba(88,166,255,.15);color:var(--obl)}
+  .flag .fd{color:var(--muted);font-size:13.5px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar button{padding:7px 12px;font-size:13px;font-weight:500}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  footer{color:var(--muted);font-size:12px;padding:26px 16px 50px;border-top:1px solid var(--border);margin-top:30px}
+  footer .src{color:var(--muted)} footer b{color:var(--text)}
+  @media print{
+    header.app,.search,.tabs,.toolbar,#status,.exp{display:none!important}
+    .panel{display:block!important;page-break-inside:avoid} .detail{display:block!important}
+    body{background:#fff;color:#000}.card,.chartbox,.flag,.lede{border-color:#ccc;background:#fff}
+  }
+  /* ---- Tore Says brand overrides (paper theme) ---- */
+  .chartbox h3{font-family:var(--serif);font-weight:600}
+  .card .v{font-family:var(--serif);font-weight:800;letter-spacing:-.01em}
+  .lede{font-family:var(--serif);font-size:17px;border-left-color:var(--hum);background:var(--panel)}
+  .sect-title{font-family:var(--mono);font-weight:600;color:var(--hum)}
+  .tab{font-family:var(--mono);font-size:12.5px;letter-spacing:.04em}
+  .tab.active{border-bottom-color:var(--hum);color:var(--text)}
+  .card .k,.field label,.kicker,.tt-tag{font-family:var(--mono)}
+  .card{box-shadow:0 12px 28px -22px rgba(28,24,19,.5)}
+  .card .bar{height:3px}
+  button.primary{background:var(--hum);color:#fff;border-color:var(--hum)}
+  button.primary:hover{filter:brightness(1.06)}
+  button:hover{border-color:var(--hum)}
+  .field input:focus,.field select:focus{border-color:var(--hum)}
+  .exp{color:var(--hum)} a{color:var(--obl)}
+  .spin{border-top-color:var(--hum)}
+  .pill.comp{background:rgba(10,122,42,.12);color:var(--paid)}
+  .pill.sole{background:rgba(179,0,0,.12);color:var(--sole)}
+  .pill.unk{background:rgba(111,97,81,.14);color:var(--muted)}
+  .sev.high{background:rgba(179,0,0,.12);color:var(--sole)}
+  .sev.med{background:rgba(181,135,44,.18);color:#8a6a1f}
+  .sev.low{background:rgba(27,90,80,.14);color:var(--obl)}
+  .paidbar{background:#e7dcc4}
+  .legend i{border-radius:3px}
+</style>
+</head>
+<body>
+<header class="app">
+  <div class="kicker">Follow the Money</div>
+  <h1>U.S. Federal Spending <span class="em">Dossier</span></h1>
+  <p>Search any agency, company, industry, place or year to see who is paid, what is committed
+     versus actually paid, who delivers it, how competitive it was, and the contract down to its
+     solicitation — pulled live from USAspending.gov and counted at the award level.</p>
+</header>
+
+<div class="wrap">
+  <!-- SEARCH -->
+  <div class="search">
+    <div class="grid">
+      <div class="field"><label for="keyword">Keyword / description</label>
+        <input id="keyword" placeholder="e.g. cybersecurity, F-35, vaccine"></div>
+      <div class="field"><label for="agency">Awarding agency</label>
+        <select id="agency"><option value="">All agencies</option></select></div>
+      <div class="field"><label for="recipient">Recipient / company</label>
+        <input id="recipient" placeholder="e.g. Lockheed, Pfizer"></div>
+      <div class="field"><label for="naics">NAICS code (industry)</label>
+        <input id="naics" placeholder="e.g. 336411 = Aircraft Mfg" inputmode="numeric"></div>
+      <div class="field"><label for="state">Place of performance (state)</label>
+        <select id="state"><option value="">All states</option></select></div>
+      <div class="field"><label for="fyStart">Fiscal year from</label><select id="fyStart"></select></div>
+      <div class="field"><label for="fyEnd">Fiscal year to</label><select id="fyEnd"></select></div>
+    </div>
+    <div class="field" style="margin-top:14px"><label>Award types</label>
+      <div class="cats" id="cats">
+        <label><input type="checkbox" value="contracts" checked> Contracts</label>
+        <label><input type="checkbox" value="idvs" checked> IDVs</label>
+        <label><input type="checkbox" value="grants" checked> Grants</label>
+        <label><input type="checkbox" value="direct"> Direct payments</label>
+        <label><input type="checkbox" value="loans"> Loans</label>
+        <label><input type="checkbox" value="other"> Other</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="run">Generate dossier</button>
+      <button class="ghost" id="reset">Reset</button>
+      <span class="hint">Leave fields blank for a government-wide view. The first lookup can take a few seconds.</span>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <!-- REPORT -->
+  <div id="report">
+    <div class="toolbar">
+      <button onclick="analysisDoc()">📄 Analysis document</button>
+      <button onclick="exportMarkdown()">⬇ Markdown dossier</button>
+      <button onclick="exportJSON()">⬇ JSON</button>
+      <button onclick="window.print()">⬇ Print / PDF</button>
+    </div>
+    <div class="lede" id="lede"></div>
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-p="overview">Overview</button>
+      <button class="tab" data-p="paid">Paid vs Committed</button>
+      <button class="tab" data-p="recipient">Recipients</button>
+      <button class="tab" data-p="naics">By Industry</button>
+      <button class="tab" data-p="agency">By Agency</button>
+      <button class="tab" data-p="competition">Competition</button>
+      <button class="tab" data-p="awards">Awards &amp; RFPs</button>
+      <button class="tab" data-p="flags">Red Flags</button>
+    </div>
+
+    <!-- OVERVIEW -->
+    <div class="panel active" data-p="overview">
+      <div class="cards" id="ovCards"></div>
+      <div class="chartbox">
+        <h3>Committed vs paid, by fiscal year</h3>
+        <div class="sub">Bars = obligated (committed). Line = outlays (actually paid out).</div>
+        <div class="canvas-h"><canvas id="ovTrend"></canvas></div>
+        <div class="legend"><span><i style="background:var(--obl)"></i>Obligated (committed)</span>
+          <span><i style="background:var(--paid)"></i>Outlays (paid)</span></div>
+      </div>
+      <p class="hint" id="ovQuery"></p>
+    </div>
+
+    <!-- PAID -->
+    <div class="panel" data-p="paid">
+      <div class="sect-title">What is paid · unpaid · still to come</div>
+      <div class="cards" id="paidCards"></div>
+      <div class="two">
+        <div class="chartbox"><h3>Money status</h3>
+          <div class="sub">Of every committed dollar, how much has actually left the Treasury.</div>
+          <div class="canvas-sm"><canvas id="paidDonut"></canvas></div></div>
+        <div class="chartbox"><h3>Outlays by fiscal year</h3>
+          <div class="sub">Cash actually paid out each year.</div>
+          <div class="canvas-sm"><canvas id="paidByFy"></canvas></div></div>
+      </div>
+      <p class="hint">“Committed” = obligated funds (a binding promise to pay). “Paid” = outlays.
+        “Unpaid” = committed but not yet disbursed. “Ceiling headroom” (contracts) = the additional
+        amount that <em>could</em> be paid if all options are exercised — money that may be paid later.</p>
+    </div>
+
+    <!-- RECIPIENTS -->
+    <div class="panel" data-p="recipient">
+      <div class="sect-title">Who gets the money</div>
+      <div class="chartbox"><h3>Top recipients</h3>
+        <div class="canvas-h"><canvas id="rcChart"></canvas></div>
+        <button class="ghost" style="margin-top:10px" onclick="downloadCSV('recipient')">⬇ CSV</button>
+        <button class="ghost" style="margin-top:10px" onclick="downloadChart('rcChart','recipients')">⬇ PNG</button>
+      </div>
+      <table id="rcTable"></table>
+    </div>
+
+    <!-- NAICS -->
+    <div class="panel" data-p="naics">
+      <div class="sect-title">By industry (NAICS)</div>
+      <div class="chartbox"><h3>Top industries</h3>
+        <div class="sub">North American Industry Classification System — what the money buys.</div>
+        <div class="canvas-h"><canvas id="naChart"></canvas></div>
+        <button class="ghost" style="margin-top:10px" onclick="downloadCSV('naics')">⬇ CSV</button>
+      </div>
+      <table id="naTable"></table>
+      <p class="hint">NAICS applies to contracts/IDVs. Grants &amp; assistance are classified by CFDA / Assistance Listing instead.</p>
+    </div>
+
+    <!-- AGENCY -->
+    <div class="panel" data-p="agency">
+      <div class="sect-title">The agency, down to the contracting office</div>
+      <div class="chartbox"><h3>Top awarding agencies</h3>
+        <div class="canvas-h"><canvas id="agChart"></canvas></div>
+        <button class="ghost" style="margin-top:10px" onclick="downloadCSV('agency')">⬇ CSV</button></div>
+      <h3 style="font-size:15px">Awarding sub-agencies</h3>
+      <table id="subTable"></table>
+    </div>
+
+    <!-- COMPETITION -->
+    <div class="panel" data-p="competition">
+      <div class="sect-title">Competed vs sole-source</div>
+      <div id="compIntro" class="hint" style="margin-bottom:12px"></div>
+      <div class="two">
+        <div class="chartbox"><h3>Competition mix</h3>
+          <div class="sub">By obligated dollars among the largest contracts analysed.</div>
+          <div class="canvas-sm"><canvas id="compDonut"></canvas></div></div>
+        <div class="chartbox"><h3>By extent of competition</h3>
+          <div class="canvas-sm"><canvas id="compBar"></canvas></div></div>
+      </div>
+      <table id="compTable"></table>
+    </div>
+
+    <!-- AWARDS -->
+    <div class="panel" data-p="awards">
+      <div class="sect-title">Largest awards — expand any row for the contract &amp; its RFP</div>
+      <button class="ghost" style="margin-bottom:12px" onclick="downloadCSV('awards')">⬇ CSV</button>
+      <table id="awTable"></table>
+      <p class="hint">Click <b>＋ detail</b> on a row to pull competition, number of offers, set-aside,
+        the <b>solicitation / RFP number</b> (with a SAM.gov &amp; FPDS link), contract ceiling, sub-award
+        count, and the contracting office — straight from USAspending’s award record.</p>
+    </div>
+
+    <!-- FLAGS -->
+    <div class="panel" data-p="flags">
+      <div class="sect-title">Red flags</div>
+      <div id="flagList"></div>
+      <p class="hint">Heuristic signals worth investigating — not proof of wrongdoing. Each links back to the underlying data.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p class="src"><b>About this data.</b> Figures are pulled live from the
+    <a href="https://www.usaspending.gov" target="_blank" rel="noopener">USAspending.gov</a> API.
+    <b>Obligated</b> totals are counted at the transaction level — each dollar counted once, in the fiscal year it was
+    obligated, with no multi-year double-counting. <b>Outlays</b> (money actually paid) are reported at the award/account
+    level and may include payments on awards that began earlier, so the paid-vs-obligated ratio is a guide, not an exact
+    subset. Contract <b>ceiling</b> (base &amp; all options) is the maximum that could still be paid. Competition, set-aside
+    and solicitation (RFP) details come from each award’s FPDS record. NAICS applies to contracts; assistance uses CFDA.
+    The API limits time ranges to roughly FY2008 onward; the latest fiscal year is provisional.</p>
+  <p class="src">Sources: api.usaspending.gov/api/v2 — spending_by_award · spending_by_category · spending_over_time · awards/&lt;id&gt;</p>
+</footer>
+
+<script>
+"use strict";
+const API="https://api.usaspending.gov/api/v2";
+
+// Each checkbox -> one USAspending award-type group. Aggregates accept mixed codes;
+// /spending_by_award/ needs single-group codes, and loans use a different amount field.
+const FIELDS_STD=["Award ID","Recipient Name","Recipient UEI","Award Amount","Total Outlays",
+  "naics_code","naics_description","psc_code","psc_description","Awarding Agency","Awarding Sub Agency",
+  "Start Date","End Date","Description"];
+const FIELDS_LOAN=["Award ID","Recipient Name","Recipient UEI","Loan Value","Awarding Agency",
+  "Awarding Sub Agency","Start Date","End Date","Description"];
+const GROUPS={
+  contracts:{codes:["A","B","C","D"], amount:"Award Amount", fields:FIELDS_STD, proc:true},
+  idvs:{codes:["IDV_A","IDV_B","IDV_B_A","IDV_B_B","IDV_B_C","IDV_C","IDV_D","IDV_E"], amount:"Award Amount", fields:FIELDS_STD, proc:true},
+  grants:{codes:["02","03","04","05"], amount:"Award Amount", fields:FIELDS_STD},
+  direct:{codes:["06","10"], amount:"Award Amount", fields:FIELDS_STD},
+  loans:{codes:["07","08"], amount:"Loan Value", fields:FIELDS_LOAN},
+  other:{codes:["09","11","-1"], amount:"Award Amount", fields:FIELDS_STD}
+};
+const STATES=["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC","PR","GU","VI","AS","MP"];
+
+let REPORT=null, CHARTS={}, DETAIL_CACHE={};
+
+const $=s=>document.querySelector(s);
+const fmt=n=>"$"+(Number(n)||0).toLocaleString("en-US",{maximumFractionDigits:0});
+const fmtShort=n=>{n=Number(n)||0;const a=Math.abs(n);
+  if(a>=1e12)return"$"+(n/1e12).toFixed(2)+"T"; if(a>=1e9)return"$"+(n/1e9).toFixed(2)+"B";
+  if(a>=1e6)return"$"+(n/1e6).toFixed(1)+"M"; if(a>=1e3)return"$"+(n/1e3).toFixed(0)+"K"; return"$"+n.toFixed(0);};
+const pct=x=>(x*100).toFixed(1)+"%";
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fyRange=fy=>({start:(fy-1)+"-10-01",end:fy+"-09-30"});
+async function post(p,b){const r=await fetch(API+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
+  if(!r.ok)throw new Error(p+" → HTTP "+r.status); return r.json();}
+
+// init
+(function(){
+  const yNow=2025, fyS=$("#fyStart"), fyE=$("#fyEnd");
+  for(let y=yNow;y>=2008;y--){fyS.add(new Option("FY"+y,y));fyE.add(new Option("FY"+y,y));}
+  fyS.value=yNow-4; fyE.value=yNow;
+  STATES.forEach(s=>$("#state").add(new Option(s,s)));
+  fetch(API+"/references/toptier_agencies/").then(r=>r.json()).then(d=>{
+    (d.results||[]).sort((a,b)=>a.agency_name.localeCompare(b.agency_name)).forEach(a=>$("#agency").add(new Option(a.agency_name,a.agency_name)));
+  }).catch(()=>{});
+  $("#run").onclick=run; $("#reset").onclick=()=>location.reload();
+  document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
+    t.classList.add("active"); $('.panel[data-p="'+t.dataset.p+'"]').classList.add("active");
+  });
+})();
+
+function buildQuery(){
+  const selected=[...document.querySelectorAll("#cats input:checked")].map(c=>c.value);
+  if(!selected.length) throw new Error("Select at least one award type.");
+  const codes=[]; selected.forEach(g=>codes.push(...GROUPS[g].codes));
+  const fyS=+$("#fyStart").value, fyE=+$("#fyEnd").value, lo=Math.min(fyS,fyE), hi=Math.max(fyS,fyE);
+  const f={time_period:[{start_date:fyRange(lo).start,end_date:fyRange(hi).end}],award_type_codes:codes};
+  const kw=$("#keyword").value.trim();   if(kw)f.keywords=[kw];
+  const rc=$("#recipient").value.trim(); if(rc)f.recipient_search_text=[rc];
+  const ag=$("#agency").value;           if(ag)f.agencies=[{type:"awarding",tier:"toptier",name:ag}];
+  const stt=$("#state").value;           if(stt)f.place_of_performance_locations=[{country:"USA",state:stt}];
+  const na=$("#naics").value.trim();     if(na)f.naics_codes=[na];
+  return {filters:f,selected,meta:{fyLo:lo,fyHi:hi,keyword:kw,recipient:rc,agency:ag,state:stt,naics:na,types:selected}};
+}
+
+async function run(){
+  let q; try{q=buildQuery();}catch(e){setStatus(e.message,true);return;}
+  setStatus('<span class="spin"></span>Pooling data from USAspending.gov…'); $("#run").disabled=true;
+  DETAIL_CACHE={};
+  try{
+    const F=q.filters;
+    // Obligations come from the TRANSACTIONS level (each dollar counted once, in the year it
+    // was obligated — no multi-year double counting). Outlays (paid) are an award/account-level
+    // concept, so we pull them with one extra award-level call and overlay them.
+    const agg=[
+      post("/search/spending_over_time/",{group:"fiscal_year",filters:F}),                        // 0 obligations/FY
+      post("/search/spending_over_time/",{group:"fiscal_year",spending_level:"awards",filters:F}), // 1 outlays/FY
+      post("/search/spending_over_time/",{group:"quarter",filters:F}),                             // 2 quarters
+      post("/search/spending_by_category/recipient/",{filters:F,limit:25,page:1}),                 // 3
+      post("/search/spending_by_category/awarding_agency/",{filters:F,limit:15,page:1}),           // 4
+      post("/search/spending_by_category/awarding_subagency/",{filters:F,limit:15,page:1}),        // 5
+      post("/search/spending_by_category/naics/",{filters:F,limit:15,page:1}).catch(()=>({results:[]})) // 6
+    ];
+    const awardCalls=q.selected.map(g=>{
+      const gf={...F,award_type_codes:GROUPS[g].codes};
+      return post("/search/spending_by_award/",{filters:gf,fields:GROUPS[g].fields,limit:25,page:1,sort:GROUPS[g].amount,order:"desc"})
+        .then(d=>(d.results||[]).map(r=>({...r,_amt:r[GROUPS[g].amount],_paid:r["Total Outlays"],_group:g,_proc:!!GROUPS[g].proc})))
+        .catch(()=>[]);
+    });
+    const res=await Promise.all([...agg,...awardCalls]);
+    const [fyObl,fyOut,quarter,recip,agency,subagency,naics]=res;
+    const awards=res.slice(7).flat().sort((a,b)=>(b._amt||0)-(a._amt||0)).slice(0,60);
+
+    // merge obligations + outlays per fiscal year
+    const outBy={}; (fyOut.results||[]).forEach(r=>outBy[r.time_period.fiscal_year]=r.total_outlays||0);
+    const fy=(fyObl.results||[]).map(r=>({fiscal_year:r.time_period.fiscal_year,
+      obligated:r.aggregated_amount||0, outlay:outBy[r.time_period.fiscal_year]||0}));
+
+    REPORT={q, fy, quarter:quarter.results||[], recip:recip.results||[],
+      agency:agency.results||[], subagency:subagency.results||[], naics:naics.results||[], awards};
+
+    // drill into the largest procurement awards for the competition section (cached for row expand)
+    setStatus('<span class="spin"></span>Analysing competition & solicitations on the largest contracts…');
+    const procTop=awards.filter(a=>a._proc && a.generated_internal_id).slice(0,15);
+    await Promise.all(procTop.map(a=>getDetail(a.generated_internal_id).catch(()=>null)));
+    REPORT.compSet=procTop;
+
+    REPORT.flags=computeFlags(REPORT);
+    render(REPORT);
+    setStatus(""); $("#report").style.display="block"; $("#report").scrollIntoView({behavior:"smooth"});
+  }catch(e){ setStatus("Error: "+e.message+". Try narrowing the query or fewer fiscal years.",true); }
+  finally{ $("#run").disabled=false; }
+}
+function setStatus(h,e){const s=$("#status");s.innerHTML=h;s.className=e?"err":"";}
+
+// ---- award detail (competition + RFP) ----
+async function getDetail(gid){
+  if(DETAIL_CACHE[gid])return DETAIL_CACHE[gid];
+  const d=await(await fetch(API+"/awards/"+encodeURIComponent(gid)+"/")).json();
+  const c=d.latest_transaction_contract_data||{}, aw=d.awarding_agency||{};
+  const det={
+    competed:c.extent_competed_description||null,
+    offers:c.number_of_offers_received,
+    setAside:c.type_set_aside_description,
+    solicitation:c.solicitation_identifier||null,
+    procedures:c.solicitation_procedures_description||c.solicitation_procedures||null,
+    ceiling:num(d.base_and_all_options),
+    obligated:num(d.total_obligation),
+    outlay:num(d.total_outlay!=null?d.total_outlay:d.total_account_outlay),
+    subawards:d.subaward_count, subAmt:num(d.total_subaward_amount),
+    office:aw.office_agency_name||null, subtier:(aw.subtier_agency||{}).name||null,
+    naics:c.naics, naicsDesc:c.naics_description, psc:c.product_or_service_code, pscDesc:c.product_or_service_description,
+    bucket:compBucket(c.extent_competed_description)
+  };
+  DETAIL_CACHE[gid]=det; return det;
+}
+function num(x){return x==null?null:Number(x);}
+function compBucket(desc){
+  if(!desc)return"Unknown"; const d=desc.toUpperCase();
+  if(d.includes("NOT AVAILABLE FOR COMPETITION")||d.includes("NOT COMPETED")||d.includes("NON-COMPETIT")||d.includes("FOLLOW ON")||d.includes("SOLE SOURCE"))return"Sole-source";
+  if(d.includes("COMPET"))return"Competed";
+  return"Other";
+}
+
+// ---- red flags ----
+function computeFlags(R){
+  const flags=[], f=(s,t,d)=>flags.push({sev:s,title:t,desc:d});
+  const oblig=R.fy.reduce((s,r)=>s+(r.obligated||0),0);
+  const paid=R.fy.reduce((s,r)=>s+(r.outlay||0),0);
+  const recTot=R.recip.reduce((s,r)=>s+(r.amount||0),0);
+  // concentration
+  if(R.recip.length){const t=R.recip[0],sh=t.amount/(recTot||1);
+    if(sh>=.30)f("high","Single-recipient concentration",`${esc(t.name)} holds ${pct(sh)} of tracked award value (${fmtShort(t.amount)}). One vendor capturing ≥30% can signal limited competition or lock-in.`);
+    else if(sh>=.15)f("med","Recipient concentration",`${esc(t.name)} holds ${pct(sh)} (${fmtShort(t.amount)}).`);}
+  if(R.recip.length>=5){const t5=R.recip.slice(0,5).reduce((s,r)=>s+r.amount,0)/(recTot||1);
+    if(t5>=.75)f("med","Top-5 vendor concentration",`The top 5 recipients hold ${pct(t5)} of tracked value — a highly concentrated market.`);}
+  // competition
+  const cs=R.compStats; if(cs && cs.total>0){const soleSh=cs.sole/cs.total;
+    if(soleSh>=.40)f("high","Heavy sole-source spending",`${pct(soleSh)} of the largest contracts analysed (${fmtShort(cs.sole)} of ${fmtShort(cs.total)}) were awarded without full competition.`);
+    else if(soleSh>=.20)f("med","Notable sole-source share",`${pct(soleSh)} of analysed contract value was not fully competed.`);
+    if(cs.oneOffer>0)f("med","Single-bid competitions",`${cs.oneOffer} of the analysed contracts marked "competed" drew only one offer — competition in name only.`);}
+  // paid ratio
+  if(oblig>0){const pr=paid/oblig;
+    if(pr<=.15)f("low","Little paid out yet",`Only ${pct(pr)} of committed funds (${fmtShort(paid)} of ${fmtShort(oblig)}) have been paid — typical for new awards, but worth tracking.`);}
+  // YoY
+  const byFy=[...R.fy].sort((a,b)=>(+a.fiscal_year)-(+b.fiscal_year));
+  for(let i=1;i<byFy.length;i++){const p=byFy[i-1].obligated,c=byFy[i].obligated;
+    if(p>0&&c/p>=1.5)f("med","Year-over-year surge",`FY${byFy[i].fiscal_year} jumped ${pct(c/p-1)} vs FY${byFy[i-1].fiscal_year} (${fmtShort(p)} → ${fmtShort(c)}).`);}
+  // Q4 surge
+  const qa={}; R.quarter.forEach(r=>{const q=r.time_period.quarter;qa[q]=(qa[q]||0)+(r.aggregated_amount||0);});
+  const qv=[1,2,3,4].map(q=>qa[q]||0),qt=qv.reduce((a,b)=>a+b,0);
+  if(qt>0){const q4=qv[3]/qt;
+    if(q4>=.35)f("high","End-of-year spending surge",`${pct(q4)} of obligations landed in Q4 (Jul–Sep) vs an even 25%. Year-end "use-it-or-lose-it" bursts are a classic waste indicator.`);
+    else if(q4>=.30)f("med","Elevated Q4 spending",`${pct(q4)} of obligations fell in Q4.`);}
+  // outsized award
+  if(R.awards.length&&oblig>0){const b=R.awards[0],sh=(b._amt||0)/oblig;
+    if(sh>=.20)f("high","Outsized single award",`One award to ${esc(b["Recipient Name"])} (${fmtShort(b._amt)}) equals ${pct(sh)} of all tracked value in this query.`);}
+  if(!flags.length)f("low","No automated red flags","None of the heuristic checks tripped for this query.");
+  const o={high:0,med:1,low:2}; flags.sort((a,b)=>o[a.sev]-o[b.sev]); return flags;
+}
+
+// ---- render ----
+function render(R){
+  const m=R.q.meta;
+  const oblig=R.fy.reduce((s,r)=>s+(r.obligated||0),0);
+  const paid=R.fy.reduce((s,r)=>s+(r.outlay||0),0);
+  const unpaid=Math.max(0,oblig-paid);
+  const recTot=R.recip.reduce((s,r)=>s+r.amount,0);
+
+  // competition stats from cached details
+  let cs={competed:0,sole:0,other:0,total:0,oneOffer:0};
+  (R.compSet||[]).forEach(a=>{const d=DETAIL_CACHE[a.generated_internal_id];if(!d)return;
+    const v=a._amt||0; cs.total+=v;
+    if(d.bucket==="Competed")cs.competed+=v; else if(d.bucket==="Sole-source")cs.sole+=v; else cs.other+=v;
+    if(d.bucket==="Competed"&&d.offers===1)cs.oneOffer++;});
+  R.compStats=cs; R.flags=computeFlags(R); // recompute with comp stats
+
+  // cards
+  const card=(k,v,s,c)=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div>${c?`<i class="bar" style="background:${c};width:100%"></i>`:""}</div>`;
+  $("#ovCards").innerHTML=[
+    card("Obligated (this period)",fmtShort(oblig),fmt(oblig),"var(--obl)"),
+    card("Paid (outlays, to date)",fmtShort(paid),oblig?pct(paid/oblig)+" of obligated":"","var(--paid)"),
+    card("Awards (funding flows)",R.awards.length>=60?"60+":String(R.awards.length),"largest shown"),
+    card("Top recipient",R.recip[0]?fmtShort(R.recip[0].amount):"—",R.recip[0]?esc(R.recip[0].name):""),
+    card("Top industry",R.naics[0]?fmtShort(R.naics[0].amount):"—",R.naics[0]?esc(R.naics[0].name):"contracts only"),
+    card("Red flags",String(R.flags.filter(f=>f.title!=="No automated red flags").length),R.flags.filter(f=>f.sev==="high").length+" high")
+  ].join("");
+  $("#ovQuery").innerHTML="Query: "+queryText(m);
+  $("#lede").innerHTML=lede(R,oblig,paid,cs);
+
+  // overview trend (obligated bars + paid line)
+  const byFy=[...R.fy].sort((a,b)=>(+a.fiscal_year)-(+b.fiscal_year));
+  const fyL=byFy.map(r=>"FY"+r.fiscal_year);
+  comboChart("ovTrend",fyL,byFy.map(r=>r.obligated),byFy.map(r=>r.outlay||0));
+
+  // paid tab
+  $("#paidCards").innerHTML=[
+    card("Obligated (this period)",fmtShort(oblig),fmt(oblig),"var(--obl)"),
+    card("Paid (outlays, to date)",fmtShort(paid),oblig?pct(paid/oblig):"","var(--paid)"),
+    card("Not yet paid",fmtShort(unpaid),oblig?pct(unpaid/oblig)+" of obligated":"","var(--unpaid)")
+  ].join("");
+  donut("paidDonut",["Paid (outlays)","Not yet paid"],[paid,unpaid],["var(--paid)","var(--unpaid)"]);
+  bar("paidByFy",fyL,byFy.map(r=>r.outlay||0),"var(--paid)",false);
+
+  // recipients (obligations, this period)
+  bar("rcChart",R.recip.slice(0,15).map(r=>r.name),R.recip.slice(0,15).map(r=>r.amount),"var(--paid)",true);
+  $("#rcTable").innerHTML=tbl(["Recipient","UEI","Obligated","% of shown"],
+    R.recip.map(r=>[recipLink(r),esc(r.uei||r.code||""),fmt(r.amount),pct(r.amount/(recTot||1))]),[0,0,1,1]);
+
+  // naics
+  if(R.naics.length){
+    bar("naChart",R.naics.slice(0,12).map(n=>n.name||n.code),R.naics.slice(0,12).map(n=>n.amount),"var(--obl)",true);
+    $("#naTable").innerHTML=tbl(["NAICS","Industry","Obligated"],
+      R.naics.map(n=>[esc(n.code),esc(n.name),fmt(n.amount)]),[0,0,1]);
+  }else{$("#naTable").innerHTML="<tbody><tr><td>No NAICS data (assistance-only query).</td></tr></tbody>";}
+
+  // agency + subagency
+  bar("agChart",R.agency.slice(0,12).map(a=>a.name),R.agency.slice(0,12).map(a=>a.amount),"var(--obl)",true);
+  $("#subTable").innerHTML=tbl(["Sub-agency","Obligated"],
+    R.subagency.map(a=>[esc(a.name),fmt(a.amount)]),[0,1]);
+
+  // competition
+  renderCompetition(R,cs);
+
+  // awards
+  $("#awTable").innerHTML=awardsTable(R.awards);
+  bindAwardRows();
+
+  // flags
+  $("#flagList").innerHTML=R.flags.map(f=>`<div class="flag ${f.sev}"><div class="ft"><span class="sev ${f.sev}">${f.sev}</span> ${esc(f.title)}</div><div class="fd">${f.desc}</div></div>`).join("");
+}
+
+function lede(R,oblig,paid,cs){
+  const m=R.q.meta, who=m.recipient?`“${esc(m.recipient)}”`:(m.agency?esc(m.agency):"the U.S. government");
+  let s=`Across FY${m.fyLo}–FY${m.fyHi}, ${who} obligated <b>${fmt(oblig)}</b>, of which <b>${fmt(paid)}</b> has actually been paid out`;
+  if(oblig>0)s+=` (${pct(paid/oblig)} disbursed)`;
+  s+=". ";
+  if(R.recip[0])s+=`Largest recipient: <b>${esc(R.recip[0].name)}</b> (${fmtShort(R.recip[0].amount)}). `;
+  if(cs&&cs.total>0)s+=`Of the biggest contracts analysed, <b>${pct(cs.sole/cs.total)}</b> were sole-source. `;
+  const hi=R.flags.filter(f=>f.sev==="high").length; if(hi)s+=`<span style="color:var(--sole)">${hi} high-severity red flag${hi>1?"s":""} raised.</span>`;
+  return s;
+}
+
+function renderCompetition(R,cs){
+  const set=R.compSet||[];
+  $("#compIntro").innerHTML=set.length
+    ? `Based on award-level FPDS records for the <b>${set.length}</b> largest contracts/IDVs in this query (${fmtShort(cs.total)} of obligations). Competed = full &amp; open; sole-source = not competed, follow-on, or non-competitive.`
+    : "No contract/IDV awards in this query to analyse for competition (assistance awards have no competition record).";
+  if(!set.length){["compDonut","compBar"].forEach(destroy);$("#compTable").innerHTML="";return;}
+  donut("compDonut",["Competed","Sole-source","Other/Unknown"],[cs.competed,cs.sole,cs.other],["var(--paid)","var(--sole)","var(--muted)"]);
+  // by extent
+  const ext={};
+  set.forEach(a=>{const d=DETAIL_CACHE[a.generated_internal_id];if(!d)return;const k=d.competed||"Unknown";ext[k]=(ext[k]||0)+(a._amt||0);});
+  const ek=Object.keys(ext).sort((a,b)=>ext[b]-ext[a]);
+  bar("compBar",ek.map(k=>k.length>26?k.slice(0,24)+"…":k),ek.map(k=>ext[k]),"var(--obl)",true);
+  $("#compTable").innerHTML=tbl(["Recipient","Award","Extent of competition","Offers","Committed"],
+    set.map(a=>{const d=DETAIL_CACHE[a.generated_internal_id]||{};
+      return [esc(a["Recipient Name"]),awardLink(a),compPill(d.bucket)+" "+esc(d.competed||"—"),d.offers!=null?d.offers:"—",fmt(a._amt)];}),[0,0,0,1,1]);
+}
+function compPill(b){const cls=b==="Competed"?"comp":b==="Sole-source"?"sole":"unk";return `<span class="pill ${cls}">${b||"?"}</span>`;}
+
+// ---- award table + drill-down ----
+function awardsTable(aws){
+  const head=["","Award ID","Recipient","Sub-agency","NAICS / industry","Committed","Paid","Period"];
+  const th=head.map((h,i)=>`<th class="${i>=5&&i<=6?'num':''}">${h}</th>`).join("");
+  const rows=aws.map((a,i)=>{
+    const paid=a._paid, pr=a._amt?Math.max(0,Math.min(1,(paid||0)/a._amt)):0;
+    const naics=a.naics_code?esc(a.naics_code)+(a.naics_description?" · "+esc(a.naics_description):""):"—";
+    const period=(a["Start Date"]||"?")+" → "+(a["End Date"]||"?");
+    const paidCell=paid!=null?`<div class="paidbar" title="${pct(pr)} paid"><i style="width:${(pr*100).toFixed(0)}%"></i></div>${fmtShort(paid)}`:"—";
+    return `<tr data-i="${i}">
+      <td><span class="exp" data-gid="${esc(a.generated_internal_id||"")}" data-i="${i}">＋ detail</span></td>
+      <td>${awardLink(a)}</td><td>${esc(a["Recipient Name"])}</td><td>${esc(a["Awarding Sub Agency"]||a["Awarding Agency"]||"")}</td>
+      <td>${naics}</td><td class="num">${fmt(a._amt)}</td><td class="num">${paidCell}</td><td>${esc(period)}</td></tr>
+      <tr class="drow" data-d="${i}" style="display:none"><td colspan="8"><div class="detail" id="det${i}">Loading…</div></td></tr>`;
+  }).join("");
+  return `<thead><tr>${th}</tr></thead><tbody>${rows}</tbody>`;
+}
+function bindAwardRows(){
+  document.querySelectorAll("#awTable .exp").forEach(el=>el.onclick=async()=>{
+    const i=el.dataset.i, gid=el.dataset.gid, drow=document.querySelector(`#awTable tr.drow[data-d="${i}"]`);
+    if(drow.style.display==="none"){drow.style.display="";el.textContent="− detail";
+      if(!gid){$("#det"+i).innerHTML="No detail id.";return;}
+      try{const d=await getDetail(gid);$("#det"+i).innerHTML=detailHTML(d,gid,REPORT.awards[i]);}
+      catch(e){$("#det"+i).innerHTML="Could not load detail.";}
+    }else{drow.style.display="none";el.textContent="＋ detail";}
+  });
+}
+function detailHTML(d,gid,a){
+  const sam=d.solicitation?`<a href="https://sam.gov/search/?index=opp&keywords=${encodeURIComponent(d.solicitation)}" target="_blank" rel="noopener">${esc(d.solicitation)}</a> · <a href="https://www.fpds.gov/ezsearch/search.do?q=${encodeURIComponent(d.solicitation)}" target="_blank" rel="noopener">FPDS</a>`:"—";
+  const ceilHead=(d.ceiling!=null&&d.obligated!=null)?Math.max(0,d.ceiling-d.obligated):null;
+  const rows=[
+    ["Competition",compPill(d.bucket)+" "+esc(d.competed||"—")],
+    ["Offers received",d.offers!=null?esc(d.offers):"—"],
+    ["Set-aside",esc(d.setAside||"—")],
+    ["Solicitation / RFP",sam],
+    ["Solicitation procedures",esc(d.procedures||"—")],
+    ["NAICS",d.naics?esc(d.naics)+" · "+esc(d.naicsDesc||""):"—"],
+    ["Product/Service (PSC)",d.psc?esc(d.psc)+" · "+esc(d.pscDesc||""):"—"],
+    ["Committed (obligated)",d.obligated!=null?fmt(d.obligated):"—"],
+    ["Paid (outlays)",d.outlay!=null?fmt(d.outlay):"—"],
+    ["Contract ceiling",d.ceiling!=null?fmt(d.ceiling):"—"],
+    ["Ceiling headroom (may still be paid)",ceilHead!=null?fmt(ceilHead):"—"],
+    ["Sub-awards (pass-through)",d.subawards!=null?esc(d.subawards)+(d.subAmt?` · ${fmtShort(d.subAmt)}`:""):"—"],
+    ["Contracting office",esc(d.office||"—")+(d.subtier?` · ${esc(d.subtier)}`:"")],
+    ["Full record",`<a href="https://www.usaspending.gov/award/${encodeURIComponent(gid)}" target="_blank" rel="noopener">Open on USAspending.gov ↗</a>`]
+  ];
+  return `<dl>${rows.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join("")}</dl>`;
+}
+
+// ---- helpers ----
+function queryText(m){const p=[];if(m.keyword)p.push('keyword "'+esc(m.keyword)+'"');if(m.recipient)p.push('recipient "'+esc(m.recipient)+'"');
+  if(m.agency)p.push("agency "+esc(m.agency));if(m.state)p.push("state "+esc(m.state));if(m.naics)p.push("NAICS "+esc(m.naics));
+  p.push("types: "+m.types.join(", "));p.push("FY"+m.fyLo+"–FY"+m.fyHi);return p.join(" · ");}
+function tbl(head,rows,numCols){const th=head.map((h,i)=>`<th class="${numCols[i]?'num':''}">${h}</th>`).join("");
+  const tr=rows.map(r=>"<tr>"+r.map((c,i)=>`<td class="${numCols[i]?'num':''}">${c}</td>`).join("")+"</tr>").join("");
+  return `<thead><tr>${th}</tr></thead><tbody>${tr}</tbody>`;}
+function awardLink(a){const id=esc(a["Award ID"]);return a.generated_internal_id?`<a href="https://www.usaspending.gov/award/${encodeURIComponent(a.generated_internal_id)}" target="_blank" rel="noopener">${id}</a>`:id;}
+function recipLink(r){return r.recipient_id?`<a href="https://www.usaspending.gov/recipient/${encodeURIComponent(r.recipient_id)}" target="_blank" rel="noopener">${esc(r.name)}</a>`:esc(r.name);}
+
+// ---- charts ----
+function destroy(id){if(CHARTS[id]){CHARTS[id].destroy();delete CHARTS[id];}}
+const tickColor="#6f6151",gridColor="rgba(28,24,19,.10)";
+function axes(horizontal){const money=function(v){return fmtShort(v);},label=function(v){return this.getLabelForValue(v);};
+  return {x:{ticks:{color:tickColor,callback:horizontal?money:label,maxRotation:0,autoSkip:true},grid:{color:gridColor}},
+          y:{ticks:{color:tickColor,callback:horizontal?label:money},grid:{color:gridColor}}};}
+function bar(id,labels,data,color,horizontal){destroy(id);
+  CHARTS[id]=new Chart($("#"+id),{type:"bar",data:{labels,datasets:[{data,backgroundColor:cssv(color),borderRadius:4}]},
+    options:{responsive:true,maintainAspectRatio:false,indexAxis:horizontal?"y":"x",
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt(c.raw)}}},scales:axes(horizontal)}});}
+function comboChart(id,labels,oblig,paid){destroy(id);
+  CHARTS[id]=new Chart($("#"+id),{data:{labels,datasets:[
+      {type:"bar",label:"Obligated",data:oblig,backgroundColor:cssv("var(--obl)"),borderRadius:4,order:2},
+      {type:"line",label:"Paid",data:paid,borderColor:cssv("var(--paid)"),backgroundColor:"rgba(63,185,80,.15)",fill:true,tension:.25,pointRadius:3,order:1}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.dataset.label+": "+fmt(c.raw)}}},scales:axes(false)}});}
+function donut(id,labels,data,colors){destroy(id);
+  CHARTS[id]=new Chart($("#"+id),{type:"doughnut",data:{labels,datasets:[{data,backgroundColor:colors.map(cssv),borderColor:"#FBF7EE",borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:"58%",
+      plugins:{legend:{position:"bottom",labels:{color:"#1C1813",boxWidth:12,font:{size:12}}},
+      tooltip:{callbacks:{label:c=>{const t=c.dataset.data.reduce((a,b)=>a+b,0);return c.label+": "+fmt(c.raw)+(t?" ("+pct(c.raw/t)+")":"");}}}}}});}
+function cssv(v){return v&&v.startsWith&&v.startsWith("var(")?getComputedStyle(document.body).getPropertyValue(v.slice(4,-1)).trim()||v:v;}
+function downloadChart(id,name){if(!CHARTS[id])return;const a=document.createElement("a");a.href=CHARTS[id].toBase64Image("image/png",1);a.download="ftm-"+name+".png";a.click();}
+
+// ---- exports ----
+function dl(fn,txt,mime){const b=new Blob([txt],{type:mime||"text/plain"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=fn;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
+function csvEsc(v){v=String(v==null?"":v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}
+function toCSV(h,rows){return [h.join(",")].concat(rows.map(r=>r.map(csvEsc).join(","))).join("\n");}
+function downloadCSV(kind){if(!REPORT)return;const R=REPORT;let h,rows,name;
+  if(kind==="recipient"){h=["Recipient","UEI","Obligated"];rows=R.recip.map(r=>[r.name,r.uei||r.code||"",r.amount]);name="recipients";}
+  else if(kind==="agency"){h=["Agency","Obligated"];rows=R.agency.map(a=>[a.name,a.amount]);name="agencies";}
+  else if(kind==="naics"){h=["NAICS","Industry","Obligated"];rows=R.naics.map(n=>[n.code,n.name,n.amount]);name="naics";}
+  else if(kind==="awards"){h=["Award ID","Recipient","UEI","Agency","Sub-agency","NAICS","NAICS desc","PSC","Committed","Paid","Start","End","Description"];
+    rows=R.awards.map(a=>[a["Award ID"],a["Recipient Name"],a["Recipient UEI"],a["Awarding Agency"],a["Awarding Sub Agency"],a.naics_code,a.naics_description,a.psc_code,a._amt,a._paid,a["Start Date"],a["End Date"],a.Description]);name="awards";}
+  dl("ftm-"+name+".csv",toCSV(h,rows),"text/csv");}
+function exportJSON(){if(REPORT)dl("ftm-dossier.json",JSON.stringify({query:REPORT.q,fy:REPORT.fy,recipients:REPORT.recip,agencies:REPORT.agency,subagencies:REPORT.subagency,naics:REPORT.naics,awards:REPORT.awards,competition:REPORT.compStats,details:DETAIL_CACHE,flags:REPORT.flags},null,2),"application/json");}
+function exportMarkdown(){if(!REPORT)return;const R=REPORT,m=R.q.meta;
+  const oblig=R.fy.reduce((s,r)=>s+(r.obligated||0),0),paid=R.fy.reduce((s,r)=>s+(r.outlay||0),0);
+  let md="# Follow the Money — U.S. Federal Spending Dossier\n\n";
+  md+="**Query:** "+queryText(m).replace(/<[^>]+>/g,"")+"\n\n**Source:** USAspending.gov API · "+new Date().toISOString().slice(0,10)+"\n\n";
+  md+="## Summary\n\n- Obligated (this period): **"+fmt(oblig)+"**\n- Paid (outlays, to date): **"+fmt(paid)+"**"+(oblig?` (${pct(paid/oblig)})`:"")+"\n- Not yet paid: **"+fmt(Math.max(0,oblig-paid))+"**\n";
+  if(R.compStats&&R.compStats.total>0)md+="- Sole-source share of largest contracts: **"+pct(R.compStats.sole/R.compStats.total)+"**\n";
+  md+="\n## Red Flags\n\n";R.flags.forEach(f=>md+="- **["+f.sev.toUpperCase()+"] "+f.title+"** — "+f.desc.replace(/<[^>]+>/g,"")+"\n");
+  md+="\n## Top Recipients\n\n| Recipient | Obligated |\n|---|--:|\n";R.recip.slice(0,15).forEach(r=>md+=`| ${r.name} | ${fmt(r.amount)} |\n`);
+  md+="\n## Top Industries (NAICS)\n\n| NAICS | Industry | Obligated |\n|---|---|--:|\n";R.naics.slice(0,12).forEach(n=>md+=`| ${n.code} | ${n.name} | ${fmt(n.amount)} |\n`);
+  md+="\n## Awarding Agencies\n\n| Agency | Obligated |\n|---|--:|\n";R.agency.slice(0,12).forEach(a=>md+=`| ${a.name} | ${fmt(a.amount)} |\n`);
+  md+="\n## Largest Awards\n\n| Award ID | Recipient | Sub-agency | NAICS | Committed | Paid |\n|---|---|---|---|--:|--:|\n";
+  R.awards.slice(0,25).forEach(a=>md+=`| ${a["Award ID"]} | ${a["Recipient Name"]} | ${a["Awarding Sub Agency"]||""} | ${a.naics_code||""} | ${fmt(a._amt)} | ${a._paid!=null?fmt(a._paid):"—"} |\n`);
+  md+="\n## Competition (largest contracts analysed)\n\n| Recipient | Award ID | Extent | Offers |\n|---|---|---|--:|\n";
+  (R.compSet||[]).forEach(a=>{const d=DETAIL_CACHE[a.generated_internal_id]||{};md+=`| ${a["Recipient Name"]} | ${a["Award ID"]} | ${(d.competed||"—")} | ${d.offers!=null?d.offers:"—"} |\n`;});
+  md+="\n---\n*Obligated = committed; outlays = paid. Competition/RFP details from FPDS. Red flags are signals for investigation, not proof of wrongdoing.*\n";
+  dl("ftm-dossier.md",md,"text/markdown");}
+</script>
+<script>
+/* When embedded in an iframe, report height to the parent so the frame can auto-grow. Harmless standalone. */
+(function(){var last=0;function H(){try{if(parent&&parent!==window){var h=document.body.scrollHeight;/* content only — NOT documentElement (that equals the iframe height and would feedback-loop) */
+if(Math.abs(h-last)>2){last=h;parent.postMessage({__ftmusaHeight:h},"*");}}}catch(e){}}
+if(window.ResizeObserver){try{new ResizeObserver(H).observe(document.body);}catch(e){}}
+window.addEventListener("load",H);window.addEventListener("resize",H);setInterval(H,800);})();
+</script>
+<script>
+/* ===== Analysis Document builder (shared, DOM-driven) ===== */
+var ADOC_CSS='*{box-sizing:border-box}body{margin:0;background:#F4EEE1;color:#1C1813;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55}.adoc-wrap{max-width:900px;margin:0 auto;padding:40px 30px}.adoc-head{border-bottom:3px solid #BE4A1F;padding-bottom:16px;margin-bottom:22px}.adoc-kick{font-family:"Spline Sans Mono",monospace;font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:#BE4A1F;font-weight:600}.adoc-head h1{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:32px;margin:8px 0 6px;line-height:1.1}.adoc-meta{font-family:"Spline Sans Mono",monospace;font-size:12px;color:#6f6151}.adoc-notes{background:#FBF7EE;border:1px solid #d8cab0;border-left:4px solid #B5872C;border-radius:10px;padding:16px 20px;margin-bottom:24px}.adoc-notes h2{font-family:"Fraunces",Georgia,serif;margin:0 0 8px;font-size:18px}.adoc-notes p{margin:0;font-size:15px;white-space:pre-wrap}.adoc-report .sect-title{font-family:"Spline Sans Mono",monospace;font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:#BE4A1F;font-weight:600;margin:26px 0 10px}.adoc-report h3{font-family:"Fraunces",Georgia,serif;font-size:18px;margin:20px 0 8px}.adoc-report .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 20px}.adoc-report .card{border:1px solid #d8cab0;border-radius:10px;padding:12px;background:#FBF7EE}.adoc-report .card .k{font-family:"Spline Sans Mono",monospace;font-size:10.5px;text-transform:uppercase;color:#6f6151}.adoc-report .card .v{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:20px;margin-top:4px}.adoc-report .card .s{font-size:11.5px;color:#6f6151;margin-top:2px}.adoc-report table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0 14px}.adoc-report th,.adoc-report td{border:1px solid #e0d4bd;padding:6px 8px;text-align:left;vertical-align:top}.adoc-report th{background:#F0E7D4;font-family:"Spline Sans Mono",monospace;font-size:10px;text-transform:uppercase;color:#6f6151}.adoc-report .flag{border:1px solid #d8cab0;border-left:4px solid #BE4A1F;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#FBF7EE}.adoc-report .lede{font-family:"Fraunces",Georgia,serif;font-size:16px;background:#FBF7EE;border:1px solid #d8cab0;border-left:4px solid #BE4A1F;border-radius:10px;padding:12px 16px;margin-bottom:18px}.adoc-report img{max-width:100%;border:1px solid #d8cab0;border-radius:8px;margin:6px 0 16px;background:#fff}.adoc-report .legend,.adoc-report .corrkey,.adoc-report .exp,.adoc-report button{display:none!important}.adoc-report .sub,.adoc-report .hint{color:#6f6151;font-size:12px}.adoc-foot{margin-top:26px;padding-top:14px;border-top:1px solid #d8cab0;color:#6f6151;font-size:11.5px}.adoc-actions{margin-top:20px;text-align:center}.adoc-actions button{background:#BE4A1F;color:#fff;border:0;border-radius:30px;padding:10px 22px;font-weight:600;cursor:pointer}@media print{.noprint{display:none!important}body{background:#fff}.adoc-wrap{max-width:none;padding:0}}';
+function escA(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+function analysisDoc(){
+  var rep=document.querySelector("#report"); if(!rep||rep.style.display==="none"){alert("Run a search first, then build your analysis document.");return;}
+  var p=document.getElementById("adocPanel");
+  if(p){p.style.display=p.style.display==="none"?"block":"none";if(p.style.display==="block")p.scrollIntoView({behavior:"smooth"});return;}
+  p=document.createElement("div"); p.id="adocPanel";
+  p.setAttribute("style","background:var(--panel,#FBF7EE);border:1px solid var(--border,#d8cab0);border-left:4px solid var(--hum,#BE4A1F);border-radius:12px;padding:16px 18px;margin-bottom:18px");
+  var L='font-family:var(--mono,monospace);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#6f6151);display:block;margin-bottom:4px;font-weight:600';
+  var I='width:100%;padding:9px 10px;margin-bottom:12px;border:1px solid var(--border,#d8cab0);border-radius:8px;background:var(--bg,#F4EEE1);color:inherit;font-size:14px;font-family:inherit';
+  p.innerHTML='<div style="font-family:var(--serif,Georgia,serif);font-weight:800;font-size:18px;margin-bottom:10px">📄 Build an analysis document</div>'
+   +'<label style="'+L+'">Title</label><input id="adocTitle" style="'+I+'">'
+   +'<label style="'+L+'">By (optional)</label><input id="adocAuthor" placeholder="Your name" style="'+I+'">'
+   +'<label style="'+L+'">Your analysis / notes</label><textarea id="adocNotes" rows="5" placeholder="What does the data show? What stands out? What should readers investigate?" style="'+I+';resize:vertical"></textarea>'
+   +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+   +'<button onclick="adocBuild(\'html\')" style="background:var(--hum,#BE4A1F);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer">⬇ Download report (HTML)</button>'
+   +'<button onclick="adocBuild(\'md\')" style="background:var(--panel2,#F0E7D4);border:1px solid var(--border,#d8cab0);border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer;color:inherit">⬇ Markdown</button>'
+   +'<button onclick="document.getElementById(\'adocPanel\').style.display=\'none\'" style="background:transparent;border:1px solid var(--border,#d8cab0);border-radius:8px;padding:10px 16px;cursor:pointer;color:inherit">Hide</button>'
+   +'<span style="color:var(--muted,#6f6151);font-size:12px">Bundles your notes with the current data, charts &amp; sources.</span></div>';
+  var tb=rep.querySelector(".toolbar"); if(tb&&tb.parentNode)tb.parentNode.insertBefore(p,tb.nextSibling); else rep.insertBefore(p,rep.firstChild);
+  var h1=document.querySelector("header.app h1"); document.getElementById("adocTitle").value=(h1?h1.textContent.replace(/\s+/g," ").trim():"Spending")+" — analysis";
+}
+function adocBuild(kind){
+  var rep=document.querySelector("#report");
+  var t=(document.getElementById("adocTitle")||{}).value||"Analysis";
+  var au=(document.getElementById("adocAuthor")||{}).value||"";
+  var nt=(document.getElementById("adocNotes")||{}).value||"";
+  var date=new Date().toISOString().slice(0,10);
+  var foot=document.querySelector("footer")?document.querySelector("footer").innerText.replace(/\s+/g," ").trim():"Source: USAspending.gov";
+  var fn="analysis-"+(t.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48)||"document");
+  if(kind==="md"){
+    var md="# "+t+"\n\n"+(au?"*By "+au+" — "+date+"*\n\n":"*"+date+"*\n\n");
+    if(nt)md+="## Analysis\n\n"+nt+"\n\n";
+    var lede=rep.querySelector("#lede"); if(lede)md+="> "+lede.innerText.replace(/\s+/g," ").trim()+"\n\n";
+    rep.querySelectorAll(".panel").forEach(function(pan){var ttl=pan.querySelector(".sect-title,h3");var tb2=pan.querySelector("table");if(tb2){if(ttl)md+="## "+ttl.innerText.trim()+"\n\n";md+=adocTableMd(tb2)+"\n\n";}});
+    var fl=rep.querySelectorAll("#flagList .flag"); if(fl.length){md+="## Red flags\n\n";fl.forEach(function(f){md+="- "+f.innerText.replace(/\s+/g," ").trim()+"\n";});md+="\n";}
+    md+="---\n"+foot+"\n";
+    dl(fn+".md",md,"text/markdown"); return;
+  }
+  var clone=rep.cloneNode(true);
+  clone.querySelectorAll(".toolbar,.tabs,#adocPanel").forEach(function(e){e.remove();});
+  clone.querySelectorAll(".panel").forEach(function(pn){pn.style.display="block";});
+  clone.querySelectorAll("details").forEach(function(d){d.setAttribute("open","");});
+  var live=rep.querySelectorAll("canvas"), cc=clone.querySelectorAll("canvas");
+  for(var i=0;i<cc.length;i++){try{var u=live[i].toDataURL("image/png",1);var im=document.createElement("img");im.src=u;cc[i].parentNode.replaceChild(im,cc[i]);}catch(e){if(cc[i].parentNode)cc[i].remove();}}
+  var notes=nt?'<div class="adoc-notes"><h2>Analysis</h2><p>'+escA(nt)+'</p></div>':"";
+  var doc='<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escA(t)+'</title>'
+    +'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..900&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet"><style>'+ADOC_CSS+'</style></head><body><div class="adoc-wrap">'
+    +'<div class="adoc-head"><div class="adoc-kick">Follow the Money · Analysis</div><h1>'+escA(t)+'</h1><div class="adoc-meta">'+(au?escA(au)+" · ":"")+date+'</div></div>'
+    +notes+'<div class="adoc-report">'+clone.innerHTML+'</div>'
+    +'<div class="adoc-foot">'+escA(foot)+'</div>'
+    +'<div class="adoc-actions noprint"><button onclick="window.print()">Print / Save as PDF</button></div>'
+    +'</div></body></html>';
+  dl(fn+".html",doc,"text/html");
+}
+function adocTableMd(tb){var out=[];var rows=tb.querySelectorAll("tr");for(var i=0;i<rows.length;i++){var cs=rows[i].querySelectorAll("th,td");if(!cs.length)continue;var arr=[];for(var j=0;j<cs.length;j++)arr.push(cs[j].innerText.replace(/\|/g,"/").replace(/\s+/g," ").trim());out.push("| "+arr.join(" | ")+" |");if(i===0)out.push("|"+arr.map(function(){return "---";}).join("|")+"|");}return out.join("\n");}
+</script>
+</body>
+</html>

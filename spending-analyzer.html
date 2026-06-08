@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>U.S. Spending Analyzer — Correlations &amp; Forensics</title>
+<!--
+  U.S. SPENDING ANALYZER (companion to the Follow-the-Money dossier)
+  Auto-pulls a dataset from USAspending.gov by query, then runs:
+  correlation heatmap, scatter + regression, trends, summary stats + outliers,
+  and forensic detectors: overlap, miscategorized, secret/non-transparent, red flags.
+  Self-contained, client-side, CORS-open API, no key. Same iframe-embed pattern as the dossier.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#F4EEE1; --panel:#FBF7EE; --panel2:#F0E7D4; --border:#d8cab0;
+    --text:#1C1813; --muted:#6f6151; --hum:#BE4A1F; --obl:#1B5A50; --paid:#0a7a2a;
+    --unpaid:#B5872C; --sole:#b30000; --gold:#B5872C;
+    --serif:'Fraunces',Georgia,serif; --mono:'Spline Sans Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       line-height:1.55;font-size:15px}
+  a{color:var(--obl);text-decoration:none} a:hover{text-decoration:underline}
+  header.app{padding:30px 20px 24px;text-align:center;border-bottom:1px solid var(--border);background:var(--bg);position:relative}
+  header.app::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,var(--hum),var(--gold) 55%,var(--obl))}
+  header.app .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--hum);font-weight:600}
+  header.app h1{font-family:var(--serif);font-weight:900;margin:8px 0 0;font-size:clamp(28px,5vw,46px);letter-spacing:-.02em}
+  header.app h1 .em{color:var(--hum)}
+  header.app p{font-family:var(--serif);font-style:italic;margin:12px auto 0;color:#4f4536;font-size:clamp(15px,2vw,18px);max-width:720px}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px}
+  .search{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:5px;font-weight:700;font-family:var(--mono)}
+  .field input,.field select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-size:14px}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--hum)}
+  .cats{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  .cats label{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);padding:6px 11px;border-radius:20px;font-size:13px;cursor:pointer;border:1px solid var(--border)}
+  .cats input{accent-color:var(--paid)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+  button{cursor:pointer;font-size:14px;font-weight:600;border-radius:8px;padding:10px 18px;border:1px solid var(--border);background:var(--panel2);color:var(--text);transition:.12s}
+  button:hover{border-color:var(--hum)}
+  button.primary{background:var(--hum);color:#fff;border-color:var(--hum)}
+  button.primary:hover{filter:brightness(1.06)}
+  button.ghost{background:transparent;font-weight:500}
+  .hint{color:var(--muted);font-size:12.5px}
+  #status{margin:18px 0;min-height:22px;font-size:14px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--border);border-top-color:var(--hum);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{color:var(--sole)}
+  #report{display:none}
+  .lede{font-family:var(--serif);font-size:17px;background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--hum);border-radius:10px;padding:14px 18px;margin:6px 0 22px}
+  .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:8px 0 22px}
+  .tab{font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;padding:10px 14px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);font-weight:600}
+  .tab.active{color:var(--text);border-bottom-color:var(--hum)}
+  .panel{display:none} .panel.active{display:block}
+  .sect-title{font-family:var(--mono);font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--hum);margin:4px 0 12px;font-weight:600}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 12px 28px -22px rgba(28,24,19,.5)}
+  .card .k{font-family:var(--mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  .card .v{font-family:var(--serif);font-size:24px;font-weight:800;margin-top:6px}
+  .card .s{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .chartbox{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:22px}
+  .chartbox h3{font-family:var(--serif);font-weight:600;margin:0 0 4px;font-size:16px}
+  .chartbox .sub{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+  .canvas-h{position:relative;height:360px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-family:var(--mono);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:var(--panel2)}
+  /* heatmap */
+  .hm{border-collapse:separate;border-spacing:3px}
+  .hm td.cell{width:74px;height:46px;text-align:center;color:#fff;font-weight:700;font-size:12px;border-radius:6px;border:none}
+  .hm th{font-size:10.5px;color:var(--muted);text-align:center;padding:4px;max-width:80px}
+  .hm th.rowh{text-align:right;white-space:nowrap}
+  .corrkey{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-top:10px}
+  .corrkey .bar{height:12px;width:180px;border-radius:6px;background:linear-gradient(90deg,#b30000,#e7dcc4 50%,#1B5A50)}
+  .flag{border-radius:10px;padding:14px 16px;margin-bottom:12px;border:1px solid var(--border);background:var(--panel)}
+  .flag.high{border-left:4px solid var(--sole)} .flag.med{border-left:4px solid var(--unpaid)} .flag.low{border-left:4px solid var(--obl)}
+  .flag .ft{font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .flag .sev{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:10px}
+  .sev.high{background:rgba(179,0,0,.12);color:var(--sole)} .sev.med{background:rgba(181,135,44,.18);color:#8a6a1f} .sev.low{background:rgba(27,90,80,.14);color:var(--obl)}
+  .flag .fd{color:var(--muted);font-size:13.5px}
+  details{margin-top:8px} summary{cursor:pointer;color:var(--hum);font-weight:600;font-size:13px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar button{padding:7px 12px;font-size:13px;font-weight:500}
+  footer{color:var(--muted);font-size:12px;padding:26px 16px 50px;border-top:1px solid var(--border);margin-top:30px}
+  footer b{color:var(--text)}
+  @media print{header.app,.search,.tabs,.toolbar,#status{display:none!important}.panel{display:block!important;page-break-inside:avoid}body{background:#fff}}
+</style>
+</head>
+<body>
+<header class="app">
+  <div class="kicker">Follow the Money · Analyzer</div>
+  <h1>U.S. Spending <span class="em">Analyzer</span></h1>
+  <p>Pull a live dataset from USAspending.gov, then surface what the totals hide: correlations,
+     outliers, trends — and forensic flags for overlap, miscategorized awards, and secret or
+     non-transparent spending.</p>
+</header>
+
+<div class="wrap">
+  <div class="search">
+    <div class="grid">
+      <div class="field"><label for="keyword">Keyword / description</label>
+        <input id="keyword" placeholder="e.g. cybersecurity, F-35, vaccine"></div>
+      <div class="field"><label for="agency">Awarding agency</label>
+        <select id="agency"><option value="">All agencies</option></select></div>
+      <div class="field"><label for="recipient">Recipient / company</label>
+        <input id="recipient" placeholder="e.g. Lockheed"></div>
+      <div class="field"><label for="naics">NAICS code</label>
+        <input id="naics" placeholder="e.g. 336411" inputmode="numeric"></div>
+      <div class="field"><label for="state">Place of performance</label>
+        <select id="state"><option value="">All states</option></select></div>
+      <div class="field"><label for="fyStart">Fiscal year from</label><select id="fyStart"></select></div>
+      <div class="field"><label for="fyEnd">Fiscal year to</label><select id="fyEnd"></select></div>
+      <div class="field"><label for="sample">Awards to analyze</label>
+        <select id="sample"><option value="150">150</option><option value="300" selected>300</option><option value="500">500</option></select></div>
+    </div>
+    <div class="field" style="margin-top:14px"><label>Award types</label>
+      <div class="cats" id="cats">
+        <label><input type="checkbox" value="contracts" checked> Contracts</label>
+        <label><input type="checkbox" value="idvs" checked> IDVs</label>
+        <label><input type="checkbox" value="grants" checked> Grants</label>
+        <label><input type="checkbox" value="direct"> Direct payments</label>
+        <label><input type="checkbox" value="loans"> Loans</label>
+        <label><input type="checkbox" value="other"> Other</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="run">Analyze</button>
+      <button class="ghost" id="reset">Reset</button>
+      <span class="hint">Pulls the largest N awards matching your query and analyzes them. Bigger samples take longer.</span>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="report">
+    <div class="toolbar">
+      <button onclick="analysisDoc()">📄 Analysis document</button>
+      <button onclick="exportCSV()">⬇ Dataset CSV</button>
+      <button onclick="exportJSON()">⬇ JSON</button>
+      <button onclick="window.print()">⬇ Print / PDF</button>
+    </div>
+    <div class="lede" id="lede"></div>
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-p="overview">Overview</button>
+      <button class="tab" data-p="corr">Correlations</button>
+      <button class="tab" data-p="scatter">Scatter + Trend</button>
+      <button class="tab" data-p="time">Trends</button>
+      <button class="tab" data-p="stats">Stats + Outliers</button>
+      <button class="tab" data-p="forensics">Forensics</button>
+    </div>
+
+    <div class="panel active" data-p="overview">
+      <div class="cards" id="ovCards"></div>
+      <div class="chartbox"><h3>What the analyzer flagged</h3>
+        <div class="sub">Counts of awards caught by each forensic detector in this dataset.</div>
+        <div class="canvas-h"><canvas id="ovBar"></canvas></div>
+      </div>
+      <p class="hint" id="ovQuery"></p>
+    </div>
+
+    <div class="panel" data-p="corr">
+      <div class="sect-title">Correlation heatmap</div>
+      <p class="hint" style="margin-top:0">Pearson correlation between numeric features across the awards. +1 = move together, −1 = move opposite, 0 = unrelated.</p>
+      <div id="heatmap" style="overflow:auto"></div>
+      <div class="corrkey"><span>−1</span><span class="bar"></span><span>+1</span></div>
+      <div id="corrReadout" style="margin-top:16px"></div>
+    </div>
+
+    <div class="panel" data-p="scatter">
+      <div class="sect-title">Scatter + regression</div>
+      <div class="row">
+        <div class="field"><label for="xsel">X axis</label><select id="xsel"></select></div>
+        <div class="field"><label for="ysel">Y axis</label><select id="ysel"></select></div>
+        <div class="field"><label>Fit</label><div id="fitInfo" class="hint" style="padding-top:9px"></div></div>
+      </div>
+      <div class="chartbox"><div class="canvas-h"><canvas id="scatter"></canvas></div></div>
+    </div>
+
+    <div class="panel" data-p="time">
+      <div class="sect-title">Trends over time</div>
+      <div class="chartbox"><h3>Obligated vs paid, by fiscal year</h3>
+        <div class="canvas-h"><canvas id="trend"></canvas></div></div>
+      <table id="trendTable"></table>
+    </div>
+
+    <div class="panel" data-p="stats">
+      <div class="sect-title">Summary statistics</div>
+      <table id="statsTable"></table>
+      <div class="row" style="margin-top:18px"><div class="field"><label for="histsel">Distribution of</label><select id="histsel"></select></div></div>
+      <div class="chartbox"><div class="canvas-h"><canvas id="hist"></canvas></div></div>
+      <div class="sect-title">Outliers (IQR method on Obligated)</div>
+      <table id="outTable"></table>
+    </div>
+
+    <div class="panel" data-p="forensics">
+      <div class="sect-title">Forensic flags</div>
+      <div id="flagList"></div>
+      <p class="hint">Heuristic signals for investigation, not proof of wrongdoing. Each lists the awards it caught, with links to the official record.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p><b>About this tool.</b> Builds a dataset from the largest awards matching your query (USAspending.gov API),
+  then computes statistics in your browser. <b>Obligated</b> = committed; <b>Outlays</b> = paid. Correlations are
+  Pearson over awards where both features are present. Forensic detectors are heuristics over text/metadata
+  (e.g. redacted recipients, missing NAICS/PSC, same recipient across agencies) — they flag things to <i>look at</i>,
+  not verified findings. Source: api.usaspending.gov.</p>
+</footer>
+
+<script>
+"use strict";
+const API="https://api.usaspending.gov/api/v2";
+const FIELDS_STD=["Award ID","Recipient Name","Recipient UEI","Award Amount","Total Outlays","naics_code","naics_description","psc_code","psc_description","Awarding Agency","Awarding Sub Agency","Start Date","End Date","Description"];
+const FIELDS_LOAN=["Award ID","Recipient Name","Recipient UEI","Loan Value","Awarding Agency","Awarding Sub Agency","Start Date","End Date","Description"];
+const GROUPS={
+  contracts:{codes:["A","B","C","D"],amount:"Award Amount",fields:FIELDS_STD,proc:true},
+  idvs:{codes:["IDV_A","IDV_B","IDV_B_A","IDV_B_B","IDV_B_C","IDV_C","IDV_D","IDV_E"],amount:"Award Amount",fields:FIELDS_STD,proc:true},
+  grants:{codes:["02","03","04","05"],amount:"Award Amount",fields:FIELDS_STD},
+  direct:{codes:["06","10"],amount:"Award Amount",fields:FIELDS_STD},
+  loans:{codes:["07","08"],amount:"Loan Value",fields:FIELDS_LOAN},
+  other:{codes:["09","11","-1"],amount:"Award Amount",fields:FIELDS_STD}
+};
+const STATES=["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC","PR","GU","VI","AS","MP"];
+const FEATURES=[
+  {key:"amt",label:"Obligated"},
+  {key:"paid",label:"Outlays"},
+  {key:"ratio",label:"Paid ratio"},
+  {key:"dur",label:"Duration (days)"},
+  {key:"perDay",label:"$/day"}
+];
+let DATA=null, CHARTS={};
+
+const $=s=>document.querySelector(s);
+const fmt=n=>"$"+(Number(n)||0).toLocaleString("en-US",{maximumFractionDigits:0});
+const fmtShort=n=>{n=Number(n)||0;const a=Math.abs(n);if(a>=1e12)return"$"+(n/1e12).toFixed(2)+"T";if(a>=1e9)return"$"+(n/1e9).toFixed(2)+"B";if(a>=1e6)return"$"+(n/1e6).toFixed(1)+"M";if(a>=1e3)return"$"+(n/1e3).toFixed(0)+"K";return"$"+n.toFixed(0);};
+const num=n=>(Number(n)||0).toLocaleString("en-US",{maximumFractionDigits:2});
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fyRange=fy=>({start:(fy-1)+"-10-01",end:fy+"-09-30"});
+async function post(p,b){const r=await fetch(API+p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});if(!r.ok)throw new Error(p+" HTTP "+r.status);return r.json();}
+
+(function(){
+  const yNow=2025,fyS=$("#fyStart"),fyE=$("#fyEnd");
+  for(let y=yNow;y>=2008;y--){fyS.add(new Option("FY"+y,y));fyE.add(new Option("FY"+y,y));}
+  fyS.value=yNow-4;fyE.value=yNow;
+  STATES.forEach(s=>$("#state").add(new Option(s,s)));
+  fetch(API+"/references/toptier_agencies/").then(r=>r.json()).then(d=>{(d.results||[]).sort((a,b)=>a.agency_name.localeCompare(b.agency_name)).forEach(a=>$("#agency").add(new Option(a.agency_name,a.agency_name)));}).catch(()=>{});
+  FEATURES.forEach(f=>{$("#xsel").add(new Option(f.label,f.key));$("#ysel").add(new Option(f.label,f.key));$("#histsel").add(new Option(f.label,f.key));});
+  $("#xsel").value="amt";$("#ysel").value="paid";$("#histsel").value="amt";
+  $("#xsel").onchange=$("#ysel").onchange=drawScatter;
+  $("#histsel").onchange=drawHist;
+  $("#run").onclick=run;$("#reset").onclick=()=>location.reload();
+  document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
+    t.classList.add("active");$('.panel[data-p="'+t.dataset.p+'"]').classList.add("active");
+  });
+})();
+
+function buildQuery(){
+  const selected=[...document.querySelectorAll("#cats input:checked")].map(c=>c.value);
+  if(!selected.length)throw new Error("Select at least one award type.");
+  const fyS=+$("#fyStart").value,fyE=+$("#fyEnd").value,lo=Math.min(fyS,fyE),hi=Math.max(fyS,fyE);
+  const codes=[];selected.forEach(g=>codes.push(...GROUPS[g].codes));
+  const f={time_period:[{start_date:fyRange(lo).start,end_date:fyRange(hi).end}],award_type_codes:codes};
+  const kw=$("#keyword").value.trim();if(kw)f.keywords=[kw];
+  const rc=$("#recipient").value.trim();if(rc)f.recipient_search_text=[rc];
+  const ag=$("#agency").value;if(ag)f.agencies=[{type:"awarding",tier:"toptier",name:ag}];
+  const stt=$("#state").value;if(stt)f.place_of_performance_locations=[{country:"USA",state:stt}];
+  const na=$("#naics").value.trim();if(na)f.naics_codes=[na];
+  return {filters:f,selected,meta:{fyLo:lo,fyHi:hi,keyword:kw,recipient:rc,agency:ag,state:stt,naics:na,types:selected}};
+}
+function days(a,b){const d1=new Date(a),d2=new Date(b);if(isNaN(d1)||isNaN(d2))return null;return Math.round((d2-d1)/86400000);}
+
+async function run(){
+  let q;try{q=buildQuery();}catch(e){setStatus(e.message,true);return;}
+  const N=+$("#sample").value, perGroup=Math.max(50,Math.ceil(N/q.selected.length));
+  setStatus('<span class="spin"></span>Pulling up to '+N+' awards from USAspending.gov…');$("#run").disabled=true;
+  try{
+    const F=q.filters;
+    // pull award rows per group (page through to perGroup), plus FY trend
+    const trendP=post("/search/spending_over_time/",{group:"fiscal_year",filters:F}).catch(()=>({results:[]}));
+    const trendOutP=post("/search/spending_over_time/",{group:"fiscal_year",spending_level:"awards",filters:F}).catch(()=>({results:[]}));
+    const groupAwards=await Promise.all(q.selected.map(g=>fetchGroup(g,F,perGroup)));
+    const [trend,trendOut]=await Promise.all([trendP,trendOutP]);
+    let rows=groupAwards.flat();
+    // features
+    rows.forEach(r=>{
+      r.amt=Number(r._amt)||0;
+      r.paid=(r["Total Outlays"]==null)?null:Number(r["Total Outlays"]);
+      r.ratio=(r.amt>0&&r.paid!=null)?Math.max(0,Math.min(2,r.paid/r.amt)):null;
+      r.dur=days(r["Start Date"],r["End Date"]);
+      r.perDay=(r.dur&&r.dur>0)?r.amt/r.dur:null;
+    });
+    rows.sort((a,b)=>b.amt-a.amt); rows=rows.slice(0,N);
+    // merge trend obl+outlay
+    const outBy={};(trendOut.results||[]).forEach(r=>outBy[r.time_period.fiscal_year]=r.total_outlays||0);
+    const fy=(trend.results||[]).map(r=>({fy:r.time_period.fiscal_year,obl:r.aggregated_amount||0,out:outBy[r.time_period.fiscal_year]||0}));
+    DATA={q,rows,fy};
+    DATA.stats=computeStats(rows);
+    DATA.corr=computeCorr(rows);
+    DATA.flags=forensics(rows,DATA.stats);
+    render();
+    setStatus("");$("#report").style.display="block";$("#report").scrollIntoView({behavior:"smooth"});
+  }catch(e){setStatus("Error: "+e.message+". Try a smaller sample or narrower query.",true);}
+  finally{$("#run").disabled=false;}
+}
+function setStatus(h,e){const s=$("#status");s.innerHTML=h;s.className=e?"err":"";}
+
+async function fetchGroup(g,F,want){
+  const gf={...F,award_type_codes:GROUPS[g].codes};
+  let out=[],page=1;
+  while(out.length<want&&page<=10){
+    let d;try{d=await post("/search/spending_by_award/",{filters:gf,fields:GROUPS[g].fields,limit:100,page,sort:GROUPS[g].amount,order:"desc"});}catch(e){break;}
+    const rs=(d.results||[]).map(r=>({...r,_amt:r[GROUPS[g].amount],_group:g,_proc:!!GROUPS[g].proc}));
+    out=out.concat(rs);
+    if(!d.page_metadata||!d.page_metadata.hasNext)break;
+    page++;
+  }
+  return out.slice(0,want);
+}
+
+// ---- statistics ----
+function col(rows,key){return rows.map(r=>r[key]).filter(v=>v!=null&&isFinite(v));}
+function mean(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:NaN;}
+function median(a){if(!a.length)return NaN;const s=[...a].sort((x,y)=>x-y),m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2;}
+function std(a){if(a.length<2)return NaN;const m=mean(a);return Math.sqrt(a.reduce((x,y)=>x+(y-m)*(y-m),0)/(a.length-1));}
+function quantile(a,p){if(!a.length)return NaN;const s=[...a].sort((x,y)=>x-y),idx=(s.length-1)*p,lo=Math.floor(idx),hi=Math.ceil(idx);return s[lo]+(s[hi]-s[lo])*(idx-lo);}
+function computeStats(rows){
+  const out={};
+  FEATURES.forEach(f=>{const a=col(rows,f.key);out[f.key]={n:a.length,mean:mean(a),median:median(a),min:a.length?Math.min(...a):NaN,max:a.length?Math.max(...a):NaN,std:std(a)};});
+  return out;
+}
+function pearson(xs,ys){
+  const n=xs.length;if(n<3)return NaN;
+  const mx=mean(xs),my=mean(ys);let num=0,dx=0,dy=0;
+  for(let i=0;i<n;i++){const a=xs[i]-mx,b=ys[i]-my;num+=a*b;dx+=a*a;dy+=b*b;}
+  if(dx===0||dy===0)return NaN;return num/Math.sqrt(dx*dy);
+}
+function pairFinite(rows,kx,ky){const xs=[],ys=[];rows.forEach(r=>{const a=r[kx],b=r[ky];if(a!=null&&b!=null&&isFinite(a)&&isFinite(b)){xs.push(a);ys.push(b);}});return{xs,ys};}
+function computeCorr(rows){
+  const m={};
+  FEATURES.forEach(fi=>{m[fi.key]={};FEATURES.forEach(fj=>{const {xs,ys}=pairFinite(rows,fi.key,fj.key);m[fi.key][fj.key]={r:pearson(xs,ys),n:xs.length};});});
+  return m;
+}
+function ols(xs,ys){const n=xs.length;if(n<3)return null;const mx=mean(xs),my=mean(ys);let sxy=0,sxx=0;for(let i=0;i<n;i++){sxy+=(xs[i]-mx)*(ys[i]-my);sxx+=(xs[i]-mx)*(xs[i]-mx);}if(sxx===0)return null;const slope=sxy/sxx,intercept=my-slope*mx,r=pearson(xs,ys);return{slope,intercept,r,r2:r*r,n};}
+
+// ---- forensics ----
+const SECRET_RE=/classified|redact|withheld|non.?disclos|undisclos|not disclosed|multiple recipients|miscellaneous foreign|sensitive but unclassified|for official use only|\bfouo\b/i;
+function forensics(rows,stats){
+  const flags=[],add=(sev,title,desc,items)=>flags.push({sev,title,desc,items:items||[]});
+
+  // SECRET / NON-TRANSPARENT
+  const secret=rows.filter(r=>{const nm=(r["Recipient Name"]||""),ds=(r.Description||"");return SECRET_RE.test(nm)||SECRET_RE.test(ds)||!nm.trim()||ds.trim().length<5;});
+  if(secret.length)add("high","Secret / non-transparent awards",
+    secret.length+" award(s) hide who got the money or what it bought — redacted/classified/withheld recipients, “multiple recipients”, or blank descriptions. "+fmtShort(sum(secret,"amt"))+" total.",secret);
+
+  // MISCATEGORIZED
+  const mis=rows.filter(r=>{const proc=r._proc;const noNaics=!r.naics_code||/^0+$|^null$/i.test(r.naics_code);const noPsc=!r.psc_code;const generic=r.psc_code&&/^99|^Z/i.test(r.psc_code);return (proc&&(noNaics||noPsc))||generic;});
+  if(mis.length)add("med","Possibly miscategorized",
+    mis.length+" contract/IDV award(s) are missing a NAICS industry code or a Product/Service code, or carry a catch-all code — making the spend hard to classify. "+fmtShort(sum(mis,"amt"))+" total.",mis);
+
+  // OVERLAP: same recipient across multiple sub-agencies
+  const byRecip={};rows.forEach(r=>{const k=(r["Recipient Name"]||"?").trim().toUpperCase();if(!k||k==="?")return;(byRecip[k]=byRecip[k]||[]).push(r);});
+  const cross=Object.entries(byRecip).map(([k,rs])=>{const ags=new Set(rs.map(r=>(r["Awarding Sub Agency"]||r["Awarding Agency"]||"").trim()).filter(Boolean));return{k,rs,ags:ags.size,total:sum(rs,"amt")};}).filter(x=>x.ags>=3).sort((a,b)=>b.total-a.total);
+  if(cross.length)add("med","Cross-agency overlap",
+    cross.length+" recipient(s) are funded by 3+ different sub-agencies in this dataset — worth checking for duplicated scope or fragmented oversight.",
+    cross.flatMap(c=>c.rs).slice(0,40),cross);
+
+  // OVERLAP: potential duplicate awards (same recipient + same amount)
+  const dupMap={};rows.forEach(r=>{const k=(r["Recipient Name"]||"?").trim().toUpperCase()+"|"+Math.round(r.amt);(dupMap[k]=dupMap[k]||[]).push(r);});
+  const dups=Object.values(dupMap).filter(a=>a.length>1&&a[0].amt>1e5);
+  if(dups.length)add("med","Possible duplicate / split awards",
+    dups.length+" group(s) of awards share the same recipient and identical obligated amount — could be legitimate, or split/duplicated. ",dups.flat().slice(0,40));
+
+  // OUTLIERS (IQR on obligated)
+  const a=col(rows,"amt"),q1=quantile(a,.25),q3=quantile(a,.75),iqr=q3-q1,hi=q3+1.5*iqr;
+  const out=rows.filter(r=>r.amt>hi).sort((x,y)=>y.amt-x.amt);
+  if(out.length)add("low","Statistical outliers (size)",
+    out.length+" award(s) are far larger than the typical award here (above "+fmtShort(hi)+", the IQR upper fence). Big single awards concentrate risk.",out.slice(0,40));
+
+  // SOLE-SOURCE proxy: single-recipient concentration
+  const tot=sum(rows,"amt");
+  const topR=Object.entries(byRecip).map(([k,rs])=>({k,t:sum(rs,"amt")})).sort((a,b)=>b.t-a.t)[0];
+  if(topR&&tot>0&&topR.t/tot>=.30)add("high","Single-recipient concentration",
+    esc(topR.k)+" captures "+pct(topR.t/tot)+" of all obligations in this dataset ("+fmtShort(topR.t)+").",byRecip[topR.k].slice(0,40));
+
+  if(!flags.length)add("low","Nothing flagged","No forensic detector tripped on this dataset.");
+  const o={high:0,med:1,low:2};flags.sort((x,y)=>o[x.sev]-o[y.sev]);return flags;
+}
+function sum(rows,key){return rows.reduce((s,r)=>s+(Number(r[key])||0),0);}
+function pct(x){return (x*100).toFixed(1)+"%";}
+
+// ---- render ----
+function render(){
+  const D=DATA,rows=D.rows,m=D.q.meta;
+  const tot=sum(rows,"amt"),paid=sum(rows.filter(r=>r.paid!=null),"paid");
+  const card=(k,v,s)=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  $("#ovCards").innerHTML=[
+    card("Awards analyzed",rows.length,"largest matching"),
+    card("Obligated",fmtShort(tot),fmt(tot)),
+    card("Recipients",new Set(rows.map(r=>r["Recipient Name"])).size,"distinct"),
+    card("Secret/opaque",cntFlag("Secret")," awards"),
+    card("Miscategorized",cntFlag("miscategor")," awards"),
+    card("Outliers",cntFlag("outliers")," awards")
+  ].join("");
+  $("#ovQuery").innerHTML="Query: "+queryText(m)+" · "+rows.length+" awards";
+  $("#lede").innerHTML=lede();
+
+  // overview bar of flag counts
+  const fc=D.flags.filter(f=>f.title!=="Nothing flagged");
+  barChart("ovBar",fc.map(f=>f.title),fc.map(f=>f.items.length),fc.map(f=>f.sev==="high"?cssv("--sole"):f.sev==="med"?cssv("--unpaid"):cssv("--obl")));
+
+  drawHeatmap();drawScatter();drawTrend();drawStats();drawHist();
+  $("#flagList").innerHTML=D.flags.map(f=>flagHTML(f)).join("");
+}
+function cntFlag(sub){const f=DATA.flags.find(x=>x.title.toLowerCase().includes(sub.toLowerCase()));return f?f.items.length:0;}
+function lede(){
+  const D=DATA,m=D.q.meta,rows=D.rows;
+  const who=m.recipient?'“'+esc(m.recipient)+'”':(m.agency?esc(m.agency):"the U.S. government");
+  const c=D.corr,best=strongestCorr();
+  let s=`Analyzed the ${rows.length} largest awards for ${who}, FY${m.fyLo}–FY${m.fyHi}. `;
+  if(best)s+=`Strongest relationship: <b>${best.a}</b> vs <b>${best.b}</b> (r=${best.r.toFixed(2)}). `;
+  const sec=cntFlag("Secret"),mis=cntFlag("miscategor");
+  if(sec)s+=`<span style="color:var(--sole)">${sec} secret/opaque award${sec>1?"s":""}.</span> `;
+  if(mis)s+=`${mis} possibly miscategorized. `;
+  return s;
+}
+function queryText(m){const p=[];if(m.keyword)p.push('“'+esc(m.keyword)+'”');if(m.recipient)p.push('recipient '+esc(m.recipient));if(m.agency)p.push(esc(m.agency));if(m.state)p.push(m.state);if(m.naics)p.push("NAICS "+m.naics);p.push("FY"+m.fyLo+"–FY"+m.fyHi);return p.join(" · ");}
+
+function strongestCorr(){let best=null;for(let i=0;i<FEATURES.length;i++)for(let j=i+1;j<FEATURES.length;j++){const r=DATA.corr[FEATURES[i].key][FEATURES[j].key];if(r&&isFinite(r.r)&&r.n>=5&&(!best||Math.abs(r.r)>Math.abs(best.r)))best={a:FEATURES[i].label,b:FEATURES[j].label,r:r.r};}return best;}
+
+function drawHeatmap(){
+  const c=DATA.corr;let h='<table class="hm"><tr><th></th>';
+  FEATURES.forEach(f=>h+=`<th>${f.label}</th>`);h+="</tr>";
+  FEATURES.forEach(fi=>{h+=`<tr><th class="rowh">${fi.label}</th>`;
+    FEATURES.forEach(fj=>{const o=c[fi.key][fj.key],r=o.r;
+      if(r==null||!isFinite(r)){h+='<td class="cell" style="background:#cdbfa6;color:#7a6c55">n/a</td>';}
+      else{h+=`<td class="cell" style="background:${corrColor(r)}" title="n=${o.n}">${r.toFixed(2)}</td>`;}});
+    h+="</tr>";});
+  h+="</table>";$("#heatmap").innerHTML=h;
+  // readout
+  const pairs=[];for(let i=0;i<FEATURES.length;i++)for(let j=i+1;j<FEATURES.length;j++){const o=c[FEATURES[i].key][FEATURES[j].key];if(o.r!=null&&isFinite(o.r)&&o.n>=5)pairs.push({a:FEATURES[i].label,b:FEATURES[j].label,r:o.r,n:o.n});}
+  pairs.sort((x,y)=>Math.abs(y.r)-Math.abs(x.r));
+  $("#corrReadout").innerHTML="<div class='sect-title'>Strongest relationships</div>"+(pairs.slice(0,5).map(p=>`<div class="flag low"><div class="fd"><b>${p.a}</b> &times; <b>${p.b}</b>: r = ${p.r.toFixed(2)} (${describeR(p.r)}, n=${p.n})</div></div>`).join("")||"<p class='hint'>Not enough overlapping data.</p>");
+}
+function corrColor(r){const t=Math.max(-1,Math.min(1,r));if(t>=0){const a=t;return `rgba(27,90,80,${.15+.85*a})`;}else{const a=-t;return `rgba(179,0,0,${.15+.85*a})`;}}
+function describeR(r){const a=Math.abs(r);const s=a<.2?"very weak":a<.4?"weak":a<.6?"moderate":a<.8?"strong":"very strong";return (r<0?"negative ":"positive ")+s;}
+
+function drawScatter(){
+  if(!DATA)return;const kx=$("#xsel").value,ky=$("#ysel").value;
+  const {xs,ys}=pairFinite(DATA.rows,kx,ky);
+  const pts=xs.map((x,i)=>({x,y:ys[i]}));
+  const fit=ols(xs,ys);let line=[];
+  if(fit){const xmin=Math.min(...xs),xmax=Math.max(...xs);line=[{x:xmin,y:fit.intercept+fit.slope*xmin},{x:xmax,y:fit.intercept+fit.slope*xmax}];}
+  $("#fitInfo").innerHTML=fit?`r=${fit.r.toFixed(2)} · R²=${fit.r2.toFixed(2)} · n=${fit.n}`:"n/a";
+  destroy("scatter");
+  CHARTS.scatter=new Chart($("#scatter"),{data:{datasets:[
+    {type:"scatter",label:"awards",data:pts,backgroundColor:"rgba(27,90,80,.45)",pointRadius:3},
+    {type:"line",label:"fit",data:line,borderColor:cssv("--hum"),borderWidth:2,pointRadius:0,fill:false}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>"("+axfmt(kx,c.parsed.x)+", "+axfmt(ky,c.parsed.y)+")"}}},
+    scales:{x:{title:{display:true,text:flabel(kx),color:"#6f6151"},ticks:{color:"#6f6151",callback:v=>axfmt(kx,v)},grid:{color:"rgba(28,24,19,.08)"}},
+            y:{title:{display:true,text:flabel(ky),color:"#6f6151"},ticks:{color:"#6f6151",callback:v=>axfmt(ky,v)},grid:{color:"rgba(28,24,19,.08)"}}}}});
+}
+function flabel(k){return (FEATURES.find(f=>f.key===k)||{}).label||k;}
+function axfmt(k,v){return (k==="amt"||k==="paid"||k==="perDay")?fmtShort(v):(k==="ratio"?(v*100).toFixed(0)+"%":Math.round(v));}
+
+function drawTrend(){
+  const fy=[...DATA.fy].sort((a,b)=>(+a.fy)-(+b.fy));
+  destroy("trend");
+  CHARTS.trend=new Chart($("#trend"),{data:{labels:fy.map(r=>"FY"+r.fy),datasets:[
+    {type:"bar",label:"Obligated",data:fy.map(r=>r.obl),backgroundColor:cssv("--obl"),borderRadius:4},
+    {type:"line",label:"Paid",data:fy.map(r=>r.out),borderColor:cssv("--paid"),backgroundColor:"rgba(10,122,42,.15)",fill:true,tension:.25,pointRadius:3}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.dataset.label+": "+fmt(c.raw)}}},
+    scales:{x:{ticks:{color:"#6f6151"},grid:{color:"rgba(28,24,19,.08)"}},y:{ticks:{color:"#6f6151",callback:v=>fmtShort(v)},grid:{color:"rgba(28,24,19,.08)"}}}}});
+  let h="<thead><tr><th>Fiscal year</th><th class='num'>Obligated</th><th class='num'>Paid</th><th class='num'>YoY</th></tr></thead><tbody>";
+  fy.forEach((r,i)=>{const g=i>0&&fy[i-1].obl>0?((r.obl/fy[i-1].obl-1)*100).toFixed(0)+"%":"—";h+=`<tr><td>FY${r.fy}</td><td class='num'>${fmt(r.obl)}</td><td class='num'>${fmt(r.out)}</td><td class='num'>${g}</td></tr>`;});
+  $("#trendTable").innerHTML=h+"</tbody>";
+}
+
+function drawStats(){
+  let h="<thead><tr><th>Feature</th><th class='num'>n</th><th class='num'>Mean</th><th class='num'>Median</th><th class='num'>Min</th><th class='num'>Max</th><th class='num'>Std dev</th></tr></thead><tbody>";
+  FEATURES.forEach(f=>{const s=DATA.stats[f.key];const fm=v=>!isFinite(v)?"—":(f.key==="ratio"?(v*100).toFixed(0)+"%":f.key==="dur"?Math.round(v):(f.key==="amt"||f.key==="paid"||f.key==="perDay")?fmtShort(v):num(v));
+    h+=`<tr><td>${f.label}</td><td class='num'>${s.n}</td><td class='num'>${fm(s.mean)}</td><td class='num'>${fm(s.median)}</td><td class='num'>${fm(s.min)}</td><td class='num'>${fm(s.max)}</td><td class='num'>${fm(s.std)}</td></tr>`;});
+  $("#statsTable").innerHTML=h+"</tbody>";
+  // outliers table (reuse forensic outliers)
+  const a=col(DATA.rows,"amt"),q1=quantile(a,.25),q3=quantile(a,.75),hi=q3+1.5*(q3-q1);
+  const out=DATA.rows.filter(r=>r.amt>hi).sort((x,y)=>y.amt-x.amt).slice(0,25);
+  let t="<thead><tr><th>Award</th><th>Recipient</th><th>Sub-agency</th><th class='num'>Obligated</th></tr></thead><tbody>";
+  out.forEach(r=>t+=`<tr><td>${awardLink(r)}</td><td>${esc(r["Recipient Name"])}</td><td>${esc(r["Awarding Sub Agency"]||"")}</td><td class='num'>${fmt(r.amt)}</td></tr>`);
+  $("#outTable").innerHTML=t+"</tbody>"+(out.length?"":"<p class='hint'>No outliers.</p>");
+}
+function drawHist(){
+  if(!DATA)return;const key=$("#histsel").value,a=col(DATA.rows,key);
+  if(a.length<2){destroy("hist");return;}
+  const lo=Math.min(...a),hi=Math.max(...a),bins=12,w=(hi-lo)/bins||1,counts=new Array(bins).fill(0);
+  a.forEach(v=>{let b=Math.floor((v-lo)/w);if(b<0)b=0;if(b>=bins)b=bins-1;counts[b]++;});
+  const labels=counts.map((_,i)=>axfmt(key,lo+i*w));
+  destroy("hist");
+  CHARTS.hist=new Chart($("#hist"),{type:"bar",data:{labels,datasets:[{data:counts,backgroundColor:cssv("--gold"),borderRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>flabel(key)+" ≈ "+i[0].label,label:c=>c.raw+" awards"}}},
+      scales:{x:{ticks:{color:"#6f6151",maxRotation:0,autoSkip:true},grid:{display:false}},y:{ticks:{color:"#6f6151"},grid:{color:"rgba(28,24,19,.08)"},title:{display:true,text:"# awards",color:"#6f6151"}}}}});
+}
+
+function flagHTML(f){
+  const items=f.items&&f.items.length?`<details><summary>Show ${Math.min(f.items.length,40)} of ${f.items.length} award(s)</summary><table><thead><tr><th>Award</th><th>Recipient</th><th>Sub-agency</th><th class='num'>Obligated</th></tr></thead><tbody>${f.items.slice(0,40).map(r=>`<tr><td>${awardLink(r)}</td><td>${esc(r["Recipient Name"]||"—")}</td><td>${esc(r["Awarding Sub Agency"]||"")}</td><td class='num'>${fmt(r.amt)}</td></tr>`).join("")}</tbody></table></details>`:"";
+  return `<div class="flag ${f.sev}"><div class="ft"><span class="sev ${f.sev}">${f.sev}</span> ${esc(f.title)}</div><div class="fd">${f.desc}</div>${items}</div>`;
+}
+function awardLink(r){const id=esc(r["Award ID"]||"award");return r.generated_internal_id?`<a href="https://www.usaspending.gov/award/${encodeURIComponent(r.generated_internal_id)}" target="_blank" rel="noopener">${id}</a>`:id;}
+
+// ---- charts util ----
+function destroy(id){if(CHARTS[id]){CHARTS[id].destroy();delete CHARTS[id];}}
+function barChart(id,labels,data,colors){destroy(id);CHARTS[id]=new Chart($("#"+id),{type:"bar",data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:4}]},
+  options:{responsive:true,maintainAspectRatio:false,indexAxis:"y",plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.raw+" awards"}}},
+    scales:{x:{ticks:{color:"#6f6151",precision:0},grid:{color:"rgba(28,24,19,.08)"}},y:{ticks:{color:"#6f6151"},grid:{display:false}}}}});}
+function cssv(v){const n=v.startsWith("--")?v:v.replace("var(","").replace(")","");return getComputedStyle(document.body).getPropertyValue(n).trim()||v;}
+
+// ---- exports ----
+function dl(fn,txt,mime){const b=new Blob([txt],{type:mime});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=fn;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
+function csvEsc(v){v=String(v==null?"":v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}
+function exportCSV(){if(!DATA)return;const head=["Award ID","Recipient","UEI","Sub-agency","NAICS","PSC","Obligated","Outlays","Paid ratio","Duration days","Start","End","Description"];
+  const rows=DATA.rows.map(r=>[r["Award ID"],r["Recipient Name"],r["Recipient UEI"],r["Awarding Sub Agency"],r.naics_code,r.psc_code,r.amt,r.paid,r.ratio,r.dur,r["Start Date"],r["End Date"],r.Description]);
+  dl("spending-dataset.csv",[head.join(",")].concat(rows.map(r=>r.map(csvEsc).join(","))).join("\n"),"text/csv");}
+function exportJSON(){if(DATA)dl("spending-analysis.json",JSON.stringify({query:DATA.q,stats:DATA.stats,correlations:DATA.corr,flags:DATA.flags.map(f=>({sev:f.sev,title:f.title,desc:f.desc,count:f.items.length})),rows:DATA.rows.length},null,2),"application/json");}
+
+// iframe auto-height
+(function(){var last=0;function H(){try{if(parent&&parent!==window){var h=document.body.scrollHeight;if(Math.abs(h-last)>2){last=h;parent.postMessage({__ftmusaHeight:h},"*");}}}catch(e){}}
+if(window.ResizeObserver){try{new ResizeObserver(H).observe(document.body);}catch(e){}}window.addEventListener("load",H);window.addEventListener("resize",H);setInterval(H,800);})();
+</script>
+<script>
+/* ===== Analysis Document builder (shared, DOM-driven) ===== */
+var ADOC_CSS='*{box-sizing:border-box}body{margin:0;background:#F4EEE1;color:#1C1813;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55}.adoc-wrap{max-width:900px;margin:0 auto;padding:40px 30px}.adoc-head{border-bottom:3px solid #BE4A1F;padding-bottom:16px;margin-bottom:22px}.adoc-kick{font-family:"Spline Sans Mono",monospace;font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:#BE4A1F;font-weight:600}.adoc-head h1{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:32px;margin:8px 0 6px;line-height:1.1}.adoc-meta{font-family:"Spline Sans Mono",monospace;font-size:12px;color:#6f6151}.adoc-notes{background:#FBF7EE;border:1px solid #d8cab0;border-left:4px solid #B5872C;border-radius:10px;padding:16px 20px;margin-bottom:24px}.adoc-notes h2{font-family:"Fraunces",Georgia,serif;margin:0 0 8px;font-size:18px}.adoc-notes p{margin:0;font-size:15px;white-space:pre-wrap}.adoc-report .sect-title{font-family:"Spline Sans Mono",monospace;font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:#BE4A1F;font-weight:600;margin:26px 0 10px}.adoc-report h3{font-family:"Fraunces",Georgia,serif;font-size:18px;margin:20px 0 8px}.adoc-report .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 20px}.adoc-report .card{border:1px solid #d8cab0;border-radius:10px;padding:12px;background:#FBF7EE}.adoc-report .card .k{font-family:"Spline Sans Mono",monospace;font-size:10.5px;text-transform:uppercase;color:#6f6151}.adoc-report .card .v{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:20px;margin-top:4px}.adoc-report .card .s{font-size:11.5px;color:#6f6151;margin-top:2px}.adoc-report table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0 14px}.adoc-report th,.adoc-report td{border:1px solid #e0d4bd;padding:6px 8px;text-align:left;vertical-align:top}.adoc-report th{background:#F0E7D4;font-family:"Spline Sans Mono",monospace;font-size:10px;text-transform:uppercase;color:#6f6151}.adoc-report .hm td.cell{color:#fff;border:none;font-weight:700;text-align:center}.adoc-report .flag{border:1px solid #d8cab0;border-left:4px solid #BE4A1F;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#FBF7EE}.adoc-report .lede{font-family:"Fraunces",Georgia,serif;font-size:16px;background:#FBF7EE;border:1px solid #d8cab0;border-left:4px solid #BE4A1F;border-radius:10px;padding:12px 16px;margin-bottom:18px}.adoc-report img{max-width:100%;border:1px solid #d8cab0;border-radius:8px;margin:6px 0 16px;background:#fff}.adoc-report .legend,.adoc-report .corrkey,.adoc-report .exp,.adoc-report button{display:none!important}.adoc-report .sub,.adoc-report .hint{color:#6f6151;font-size:12px}.adoc-foot{margin-top:26px;padding-top:14px;border-top:1px solid #d8cab0;color:#6f6151;font-size:11.5px}.adoc-actions{margin-top:20px;text-align:center}.adoc-actions button{background:#BE4A1F;color:#fff;border:0;border-radius:30px;padding:10px 22px;font-weight:600;cursor:pointer}@media print{.noprint{display:none!important}body{background:#fff}.adoc-wrap{max-width:none;padding:0}}';
+function escA(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+function analysisDoc(){
+  var rep=document.querySelector("#report"); if(!rep||rep.style.display==="none"){alert("Run a search first, then build your analysis document.");return;}
+  var p=document.getElementById("adocPanel");
+  if(p){p.style.display=p.style.display==="none"?"block":"none";if(p.style.display==="block")p.scrollIntoView({behavior:"smooth"});return;}
+  p=document.createElement("div"); p.id="adocPanel";
+  p.setAttribute("style","background:var(--panel,#FBF7EE);border:1px solid var(--border,#d8cab0);border-left:4px solid var(--hum,#BE4A1F);border-radius:12px;padding:16px 18px;margin-bottom:18px");
+  var L='font-family:var(--mono,monospace);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#6f6151);display:block;margin-bottom:4px;font-weight:600';
+  var I='width:100%;padding:9px 10px;margin-bottom:12px;border:1px solid var(--border,#d8cab0);border-radius:8px;background:var(--bg,#F4EEE1);color:inherit;font-size:14px;font-family:inherit';
+  p.innerHTML='<div style="font-family:var(--serif,Georgia,serif);font-weight:800;font-size:18px;margin-bottom:10px">📄 Build an analysis document</div>'
+   +'<label style="'+L+'">Title</label><input id="adocTitle" style="'+I+'">'
+   +'<label style="'+L+'">By (optional)</label><input id="adocAuthor" placeholder="Your name" style="'+I+'">'
+   +'<label style="'+L+'">Your analysis / notes</label><textarea id="adocNotes" rows="5" placeholder="What does the data show? What stands out? What should readers investigate?" style="'+I+';resize:vertical"></textarea>'
+   +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+   +'<button onclick="adocBuild(\'html\')" style="background:var(--hum,#BE4A1F);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer">⬇ Download report (HTML)</button>'
+   +'<button onclick="adocBuild(\'md\')" style="background:var(--panel2,#F0E7D4);border:1px solid var(--border,#d8cab0);border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer;color:inherit">⬇ Markdown</button>'
+   +'<button onclick="document.getElementById(\'adocPanel\').style.display=\'none\'" style="background:transparent;border:1px solid var(--border,#d8cab0);border-radius:8px;padding:10px 16px;cursor:pointer;color:inherit">Hide</button>'
+   +'<span style="color:var(--muted,#6f6151);font-size:12px">Bundles your notes with the current data, charts &amp; sources.</span></div>';
+  var tb=rep.querySelector(".toolbar"); if(tb&&tb.parentNode)tb.parentNode.insertBefore(p,tb.nextSibling); else rep.insertBefore(p,rep.firstChild);
+  var h1=document.querySelector("header.app h1"); document.getElementById("adocTitle").value=(h1?h1.textContent.replace(/\s+/g," ").trim():"Spending")+" — analysis";
+}
+function adocBuild(kind){
+  var rep=document.querySelector("#report");
+  var t=(document.getElementById("adocTitle")||{}).value||"Analysis";
+  var au=(document.getElementById("adocAuthor")||{}).value||"";
+  var nt=(document.getElementById("adocNotes")||{}).value||"";
+  var date=new Date().toISOString().slice(0,10);
+  var foot=document.querySelector("footer")?document.querySelector("footer").innerText.replace(/\s+/g," ").trim():"Source: USAspending.gov";
+  var fn="analysis-"+(t.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48)||"document");
+  if(kind==="md"){
+    var md="# "+t+"\n\n"+(au?"*By "+au+" — "+date+"*\n\n":"*"+date+"*\n\n");
+    if(nt)md+="## Analysis\n\n"+nt+"\n\n";
+    var lede=rep.querySelector("#lede"); if(lede)md+="> "+lede.innerText.replace(/\s+/g," ").trim()+"\n\n";
+    rep.querySelectorAll(".panel").forEach(function(pan){var ttl=pan.querySelector(".sect-title,h3");var tb2=pan.querySelector("table");if(tb2){if(ttl)md+="## "+ttl.innerText.trim()+"\n\n";md+=adocTableMd(tb2)+"\n\n";}});
+    var fl=rep.querySelectorAll("#flagList .flag"); if(fl.length){md+="## Red flags\n\n";fl.forEach(function(f){md+="- "+f.innerText.replace(/\s+/g," ").trim()+"\n";});md+="\n";}
+    md+="---\n"+foot+"\n";
+    dl(fn+".md",md,"text/markdown"); return;
+  }
+  var clone=rep.cloneNode(true);
+  clone.querySelectorAll(".toolbar,.tabs,#adocPanel").forEach(function(e){e.remove();});
+  clone.querySelectorAll(".panel").forEach(function(pn){pn.style.display="block";});
+  clone.querySelectorAll("details").forEach(function(d){d.setAttribute("open","");});
+  var live=rep.querySelectorAll("canvas"), cc=clone.querySelectorAll("canvas");
+  for(var i=0;i<cc.length;i++){try{var u=live[i].toDataURL("image/png",1);var im=document.createElement("img");im.src=u;cc[i].parentNode.replaceChild(im,cc[i]);}catch(e){if(cc[i].parentNode)cc[i].remove();}}
+  var notes=nt?'<div class="adoc-notes"><h2>Analysis</h2><p>'+escA(nt)+'</p></div>':"";
+  var doc='<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escA(t)+'</title>'
+    +'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..900&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet"><style>'+ADOC_CSS+'</style></head><body><div class="adoc-wrap">'
+    +'<div class="adoc-head"><div class="adoc-kick">Follow the Money · Analysis</div><h1>'+escA(t)+'</h1><div class="adoc-meta">'+(au?escA(au)+" · ":"")+date+'</div></div>'
+    +notes+'<div class="adoc-report">'+clone.innerHTML+'</div>'
+    +'<div class="adoc-foot">'+escA(foot)+'</div>'
+    +'<div class="adoc-actions noprint"><button onclick="window.print()">Print / Save as PDF</button></div>'
+    +'</div></body></html>';
+  dl(fn+".html",doc,"text/html");
+}
+function adocTableMd(tb){var out=[];var rows=tb.querySelectorAll("tr");for(var i=0;i<rows.length;i++){var cs=rows[i].querySelectorAll("th,td");if(!cs.length)continue;var arr=[];for(var j=0;j<cs.length;j++)arr.push(cs[j].innerText.replace(/\|/g,"/").replace(/\s+/g," ").trim());out.push("| "+arr.join(" | ")+" |");if(i===0)out.push("|"+arr.map(function(){return "---";}).join("|")+"|");}return out.join("\n");}
+</script>
+</body>
+</html>
