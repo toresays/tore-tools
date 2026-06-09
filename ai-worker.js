@@ -24,6 +24,8 @@
  */
 
 const MODEL = "claude-opus-4-8";
+const PER_IP_HOURLY = 10;   // max AI analyses per visitor per hour
+const GLOBAL_DAILY  = 400;  // max AI analyses site-wide per day (protects your balance)
 const ALLOW_ORIGINS = [
   "https://toresays.github.io",
   "https://toresays.com",
@@ -77,6 +79,23 @@ export default {
 
     let body;
     try { body = await request.json(); } catch { return json({ error: "Bad JSON" }, 400, origin); }
+
+    // ---- rate limiting (protects the account balance) ----
+    if (env.RL) {
+      const ip = request.headers.get("CF-Connecting-IP") || "anon";
+      const t = Date.now();
+      const hourKey = "ip:" + ip + ":" + Math.floor(t / 3600000);
+      const dayKey  = "day:" + Math.floor(t / 86400000);
+      const [ipc, gc] = await Promise.all([env.RL.get(hourKey), env.RL.get(dayKey)]);
+      if ((+ipc || 0) >= PER_IP_HOURLY)
+        return json({ error: "You've hit the hourly limit for AI deep-dives from this connection. Browsing and the trap detector still work — try the AI again in a bit." }, 429, origin);
+      if ((+gc || 0) >= GLOBAL_DAILY)
+        return json({ error: "The site's daily AI deep-dive limit has been reached. Everything else still works; the AI resets tomorrow." }, 429, origin);
+      await Promise.all([
+        env.RL.put(hourKey, String((+ipc || 0) + 1), { expirationTtl: 3600 }),
+        env.RL.put(dayKey,  String((+gc  || 0) + 1), { expirationTtl: 86400 })
+      ]);
+    }
 
     const { title = "", bill = "", policyArea = "", flagged = [], textSample = "" } = body;
     const flaggedText = (Array.isArray(flagged) ? flagged : []).slice(0, 40).join("\n• ");
