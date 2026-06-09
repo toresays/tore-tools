@@ -256,6 +256,9 @@ const AI_WORKER_URL = "https://read-the-bills-ai.toresays.workers.dev"; // Cloud
 const PAGE = 40;                            // bills per page in browse mode
 
 let API_KEY = localStorage.getItem("tore_congress_key") || EMBEDDED_KEY;
+let AI_TOKEN = localStorage.getItem("tore_ai_token");
+if(!AI_TOKEN){AI_TOKEN=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():(Date.now()+"-"+Math.random().toString(16).slice(2));localStorage.setItem("tore_ai_token",AI_TOKEN);}
+let AI_CFG={paywall:false,credits:null,packCredits:0,buyUrl:""};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const A=encodeURIComponent;
@@ -693,7 +696,7 @@ async function runAnalyzer(){
       +'<div><div style="font-weight:700">Scrutiny score: '+lbl+'</div>'
       +'<div class="hint">'+nHigh+' high-concern · '+nMed+' medium · '+res.vcount+' vague terms across ~'+Math.round(res.len/1000)+'k characters. '
       +'A reading aid, not a verdict.</div></div></div>';
-    if(AI_WORKER_URL)h+='<div class="toolbar"><button class="primary" onclick="runAI()">✦ Run Claude AI deep-dive</button><span class="hint">Plain-English summary + who benefits / who\'s burdened.</span></div><div id="aiBox"></div>';
+    if(AI_WORKER_URL)h+='<div class="toolbar"><button class="primary" id="aiRunBtn" onclick="runAI()">✦ Run Claude AI deep-dive</button><span class="hint" id="aiCredits">Plain-English summary + who benefits / who\'s burdened.</span></div><div id="aiBox"></div>';
     else h+='<div class="setupbox" id="aiBox"><b>✦ AI deep-dive (not yet configured).</b> The rules detector above runs with no setup. To add a plain-English Claude analysis, deploy the included <code>ai-worker.js</code> Cloudflare Worker and set <code>AI_WORKER_URL</code> at the top of this file.</div>';
     h+='<div class="sect-title">Flagged language ('+res.flags.length+' kinds)</div>';
     if(!res.flags.length)h+='<p class="hint">No watch-phrases detected. The bill may be short, procedural, or unusually plain.</p>';
@@ -706,15 +709,50 @@ async function runAnalyzer(){
       +'<p class="hint"><a href="'+esc(url)+'" target="_blank" rel="noopener">Open the official text on congress.gov ↗</a></p>'
       +'<div class="textbox">'+highlightText(text,res.ranges)+'</div>';
     out.innerHTML=h;
+    if(AI_WORKER_URL)refreshCredits();
   }catch(e){out.innerHTML='<p class="err">'+esc(e.message)+' <span class="hint">Some older bills host text on a server that blocks direct reading; use the congress.gov link instead.</span></p>';}
 }
 
+async function aiConfigLoad(){
+  if(!AI_WORKER_URL)return;
+  try{const r=await fetch(AI_WORKER_URL+"/balance?token="+encodeURIComponent(AI_TOKEN));const j=await r.json();if(j&&typeof j==="object")AI_CFG=j;}catch(e){}
+}
+function setCreditsLabel(n){
+  const el=$("#aiCredits");if(!el||!AI_CFG.paywall)return;
+  el.innerHTML=(n>0?'<b>'+n+'</b> AI credit'+(n===1?'':'s')+' left':'Out of AI credits — buy a pack to continue');
+}
+async function refreshCredits(){
+  await aiConfigLoad();
+  if(!AI_CFG.paywall)return;            // paywall off → leave the default hint, AI is free
+  setCreditsLabel(AI_CFG.credits);
+  const btn=$("#aiRunBtn");
+  if((AI_CFG.credits||0)<=0&&btn)btn.outerHTML='<button class="primary" id="aiRunBtn" onclick="buyCredits()">✦ Buy AI credits — '+(AI_CFG.packCredits||100)+' deep-dives</button>';
+}
+function buyPrompt(buyUrl,pack){
+  if(buyUrl)AI_CFG.buyUrl=buyUrl; if(pack)AI_CFG.packCredits=pack;
+  return '<div class="setupbox"><b>Out of AI credits.</b> Unlock '+(AI_CFG.packCredits||100)+' Claude deep-dives.'
+    +'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'
+    +'<button class="primary" onclick="buyCredits()">✦ Buy AI credits</button>'
+    +'<button class="ghost" onclick="(async()=>{await refreshCredits();runAI();})()">I’ve paid — continue</button></div></div>';
+}
+function buyCredits(){
+  if(!AI_CFG.buyUrl){alert("Purchasing isn’t set up yet — check back soon.");return;}
+  const u=AI_CFG.buyUrl+(AI_CFG.buyUrl.indexOf("?")>=0?"&":"?")+"client_reference_id="+encodeURIComponent(AI_TOKEN);
+  window.open(u,"_blank","noopener");
+  const box=$("#aiBox");if(box)box.innerHTML='<p class="hint"><span class="spin"></span>Waiting for your payment to confirm… this updates automatically once Stripe completes.</p>';
+  let tries=0;clearInterval(window._aiPoll);
+  window._aiPoll=setInterval(async()=>{tries++;const before=AI_CFG.credits||0;await aiConfigLoad();
+    if((AI_CFG.credits||0)>before){clearInterval(window._aiPoll);setCreditsLabel(AI_CFG.credits);if(box)box.innerHTML='<p class="hint">✓ '+AI_CFG.credits+' credits added. Running your analysis…</p>';runAI();}
+    if(tries>40)clearInterval(window._aiPoll);
+  },3000);
+}
 async function runAI(){
   const box=$("#aiBox");box.innerHTML='<p class="hint"><span class="spin"></span>Asking Claude to read the flagged passages…</p>';
   try{
     const d=detailCache.get(CURRENT.type+"-"+CURRENT.number)||{};
     const flagged=(LASTSCAN?LASTSCAN.flags:[]).flatMap(f=>f.examples.map(e=>e.replace(/<\/?mark>/g,"").replace(/&[a-z]+;/g," "))).slice(0,40);
     const payload={
+      token:AI_TOKEN,
       title:d.title||"",
       bill:typeLabel(CURRENT.type)+" "+CURRENT.number,
       policyArea:(d.policyArea||{}).name||"",
@@ -723,11 +761,13 @@ async function runAI(){
     };
     const r=await fetch(AI_WORKER_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     const j=await r.json().catch(()=>({}));
+    if(r.status===402||j.error==="no_credits"){box.innerHTML=buyPrompt(j.buyUrl,j.packCredits);return;}
     if(!r.ok||j.error){
       let msg=j.error||("AI service error (HTTP "+r.status+")");
       try{var dd=JSON.parse(j.detail);if(dd&&dd.error&&dd.error.message)msg=dd.error.message;}catch(e){}
       throw new Error(msg);
     }
+    if(typeof j.creditsLeft==="number")setCreditsLabel(j.creditsLeft);
     const a=j.analysis||j;
     let h='<div class="ai-out">';
     if(a.plainSummary){h+='<h4>In plain English</h4><p>'+esc(a.plainSummary)+'</p>';}
