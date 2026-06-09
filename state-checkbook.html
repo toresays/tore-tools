@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Follow the Money — State Checkbook</title>
+<!--
+  STATE CHECKBOOK — named state spending (vendors/payees) for states that publish
+  machine-readable data. Live queries to each state's Socrata SoQL API (CORS-open),
+  so it shows named companies/NGOs/individuals + amounts with no backend.
+  Add a state = one config entry {domain, dataset id, field map}.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{--bg:#F4EEE1;--panel:#FBF7EE;--panel2:#F0E7D4;--border:#d8cab0;--text:#1C1813;--muted:#6f6151;--hum:#BE4A1F;--obl:#1B5A50;--paid:#0a7a2a;--unpaid:#B5872C;--sole:#b30000;--gold:#B5872C;--serif:'Fraunces',Georgia,serif;--mono:'Spline Sans Mono',ui-monospace,monospace;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55;font-size:15px}
+  a{color:var(--obl);text-decoration:none} a:hover{text-decoration:underline}
+  header.app{padding:30px 20px 24px;text-align:center;border-bottom:1px solid var(--border);background:var(--bg);position:relative}
+  header.app::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,var(--hum),var(--gold) 55%,var(--obl))}
+  header.app .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--hum);font-weight:600}
+  header.app h1{font-family:var(--serif);font-weight:900;margin:8px 0 0;font-size:clamp(28px,5vw,46px);letter-spacing:-.02em}
+  header.app h1 .em{color:var(--hum)}
+  header.app p{font-family:var(--serif);font-style:italic;margin:12px auto 0;color:#4f4536;font-size:clamp(15px,2vw,18px);max-width:720px}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px}
+  .search{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:5px;font-weight:700;font-family:var(--mono)}
+  .field input,.field select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-size:14px}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--hum)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+  button{cursor:pointer;font-size:14px;font-weight:600;border-radius:8px;padding:10px 18px;border:1px solid var(--border);background:var(--panel2);color:var(--text);transition:.12s}
+  button:hover{border-color:var(--hum)}
+  button.primary{background:var(--hum);color:#fff;border-color:var(--hum)}
+  button.ghost{background:transparent;font-weight:500}
+  .hint{color:var(--muted);font-size:12.5px}
+  #status{margin:18px 0;min-height:22px;font-size:14px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--border);border-top-color:var(--hum);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{color:var(--sole)}
+  #report{display:none}
+  .lede{font-family:var(--serif);font-size:17px;background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--hum);border-radius:10px;padding:14px 18px;margin:6px 0 22px}
+  .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:8px 0 22px}
+  .tab{font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;padding:10px 14px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);font-weight:600}
+  .tab.active{color:var(--text);border-bottom-color:var(--hum)}
+  .panel{display:none} .panel.active{display:block}
+  .sect-title{font-family:var(--mono);font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--hum);margin:4px 0 12px;font-weight:600}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 12px 28px -22px rgba(28,24,19,.5)}
+  .card .k{font-family:var(--mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  .card .v{font-family:var(--serif);font-size:23px;font-weight:800;margin-top:6px}
+  .card .s{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .chartbox{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:22px}
+  .chartbox h3{font-family:var(--serif);font-weight:600;margin:0 0 4px;font-size:16px}
+  .chartbox .sub{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+  .canvas-h{position:relative;height:360px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-family:var(--mono);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:var(--panel2)}
+  .flag{border-radius:10px;padding:14px 16px;margin-bottom:12px;border:1px solid var(--border);background:var(--panel)}
+  .flag.high{border-left:4px solid var(--sole)} .flag.med{border-left:4px solid var(--unpaid)} .flag.low{border-left:4px solid var(--obl)}
+  .flag .ft{font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .flag .sev{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:10px}
+  .sev.high{background:rgba(179,0,0,.12);color:var(--sole)} .sev.med{background:rgba(181,135,44,.18);color:#8a6a1f} .sev.low{background:rgba(27,90,80,.14);color:var(--obl)}
+  .flag .fd{color:var(--muted);font-size:13.5px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar button{padding:7px 12px;font-size:13px;font-weight:500}
+  footer{color:var(--muted);font-size:12px;padding:26px 16px 50px;border-top:1px solid var(--border);margin-top:30px}
+  footer b{color:var(--text)}
+  @media print{header.app,.search,.tabs,.toolbar,#status{display:none!important}.panel{display:block!important;page-break-inside:avoid}body{background:#fff}}
+</style>
+</head>
+<body>
+<header class="app">
+  <div class="kicker">Follow the Money · State Checkbook</div>
+  <h1>State <span class="em">Checkbook</span></h1>
+  <p>Pick a state and see where its own tax dollars go — the named companies, non-profits and
+     individuals it pays, by agency, category and year. Pulled live from each state's official
+     open-data API.</p>
+</header>
+
+<div class="wrap">
+  <div class="search">
+    <div class="grid">
+      <div class="field"><label for="state">State *</label><select id="state"></select></div>
+      <div class="field"><label for="vendor">Vendor / payee name</label><input id="vendor" placeholder="e.g. a company, non-profit, person"></div>
+      <div class="field"><label for="agency">Agency (contains)</label><input id="agency" placeholder="e.g. health, transportation"></div>
+      <div class="field"><label for="fyStart">Year from</label><select id="fyStart"></select></div>
+      <div class="field"><label for="fyEnd">Year to</label><select id="fyEnd"></select></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="run">Show spending</button>
+      <button class="ghost" id="reset">Reset</button>
+      <span class="hint" id="srcHint"></span>
+    </div>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="report">
+    <div class="toolbar">
+      <button onclick="analysisDoc()">📄 Analysis document</button>
+      <button onclick="exportCSV('vendors')">⬇ Vendors CSV</button>
+      <button onclick="exportJSON()">⬇ JSON</button>
+      <button onclick="window.print()">⬇ Print / PDF</button>
+    </div>
+    <div class="lede" id="lede"></div>
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-p="overview">Overview</button>
+      <button class="tab" data-p="vendors">Top Recipients</button>
+      <button class="tab" data-p="agency">By Agency</button>
+      <button class="tab" data-p="category">By Category</button>
+      <button class="tab" data-p="tx">Largest Payments</button>
+      <button class="tab" data-p="flags">Red Flags</button>
+    </div>
+
+    <div class="panel active" data-p="overview">
+      <div class="cards" id="ovCards"></div>
+      <div class="chartbox"><h3>Spending by year</h3><div class="canvas-h"><canvas id="ovTrend"></canvas></div></div>
+      <p class="hint" id="ovQuery"></p>
+    </div>
+    <div class="panel" data-p="vendors">
+      <div class="sect-title">Who gets paid — named recipients</div>
+      <div class="chartbox"><h3>Top recipients</h3><div class="canvas-h"><canvas id="rcChart"></canvas></div></div>
+      <table id="rcTable"></table>
+    </div>
+    <div class="panel" data-p="agency">
+      <div class="sect-title">By agency</div>
+      <div class="chartbox"><h3>Top agencies</h3><div class="canvas-h"><canvas id="agChart"></canvas></div></div>
+      <table id="agTable"></table>
+    </div>
+    <div class="panel" data-p="category">
+      <div class="sect-title">By category</div>
+      <div class="chartbox"><h3>Top categories</h3><div class="canvas-h"><canvas id="caChart"></canvas></div></div>
+      <table id="caTable"></table>
+    </div>
+    <div class="panel" data-p="tx">
+      <div class="sect-title">Largest individual payments</div>
+      <table id="txTable"></table>
+    </div>
+    <div class="panel" data-p="flags">
+      <div class="sect-title">Red flags</div>
+      <div id="flagList"></div>
+      <p class="hint">Heuristic signals worth a look — not proof of wrongdoing.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p><b>About this tool.</b> Live data from each state's official open-data API (Socrata). Amounts are state
+  expenditures/payments as published by the state. Some top entries are internal transfers or fiscal-agent
+  payments (e.g. "fiscal agent", "summary trust payment") rather than outside vendors — read names in that light.
+  Source for the selected state is linked above. Data coverage and fields vary by state.</p>
+  <p id="srcFoot" class="src"></p>
+</footer>
+
+<script>
+"use strict";
+/* Each state = one config. fy = a fiscal-year text column; fyExpr = a SoQL expression (numeric) when there is no fy column.
+   vendor/amount/agency/category are column names; optional date/desc/city. portal = human link. */
+const STATES={
+  MD:{name:"Maryland", domain:"opendata.maryland.gov", id:"7syw-q4cy", vendor:"vendor_name", amount:"amount", fy:"fiscal_year", agency:"agency_name", category:"category", date:"date", portal:"https://opendata.maryland.gov/d/7syw-q4cy"},
+  MA:{name:"Massachusetts", domain:"cthru.data.socrata.com", id:"pegc-naaa", vendor:"vendor", amount:"amount", fy:"budget_fiscal_year", agency:"department", category:"object_class", date:"date", city:"city", portal:"https://cthruspending.mass.gov/"},
+  NJ:{name:"New Jersey", domain:"data.nj.gov", id:"apet-rp2i", vendor:"payee_name", amount:"expended_amt", fy:"budget_fiscal_year", agency:"ibno_agency", category:"expenditure_category", desc:"expenditure_desc", portal:"https://www.yourmoney.nj.gov/"},
+  OR:{name:"Oregon", domain:"data.oregon.gov", id:"y9g9-xsxs", vendor:"vendor", amount:"expense", fy:"fiscal_year", agency:"agency_1", category:"expend_class_1", portal:"https://www.oregon.gov/transparency/Pages/Checkbook.aspx"},
+  VT:{name:"Vermont", domain:"data.vermont.gov", id:"p5kg-p2h8", vendor:"vendor", amount:"amt", fyExpr:"date_extract_y(qtrending)", agency:"govtunit", category:"account", desc:"description", date:"qtrending", portal:"https://spotlight.vermont.gov/"}
+};
+
+let REPORT=null, CHARTS={};
+const $=s=>document.querySelector(s);
+const fmt=n=>"$"+(Number(n)||0).toLocaleString("en-US",{maximumFractionDigits:0});
+const fmtShort=n=>{n=Number(n)||0;const a=Math.abs(n);if(a>=1e12)return"$"+(n/1e12).toFixed(2)+"T";if(a>=1e9)return"$"+(n/1e9).toFixed(2)+"B";if(a>=1e6)return"$"+(n/1e6).toFixed(1)+"M";if(a>=1e3)return"$"+(n/1e3).toFixed(0)+"K";return"$"+n.toFixed(0);};
+const pct=x=>(x*100).toFixed(1)+"%";
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const titleCase=s=>String(s||"").toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());
+const sq=s=>String(s).replace(/'/g,"''"); // escape SoQL string literal
+function cfg(){return STATES[$("#state").value];}
+function fyCol(c){return c.fyExpr||c.fy;}
+async function soql(c,q){const url="https://"+c.domain+"/resource/"+c.id+".json?"+q;const r=await fetch(url);if(!r.ok)throw new Error(c.name+" API HTTP "+r.status);return r.json();}
+
+(function(){
+  const sel=$("#state"); Object.keys(STATES).forEach(k=>sel.add(new Option(STATES[k].name+" ("+k+")",k)));
+  sel.value="MD"; sel.onchange=onState;
+  $("#run").onclick=run; $("#reset").onclick=()=>location.reload();
+  document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));t.classList.add("active");$('.panel[data-p="'+t.dataset.p+'"]').classList.add("active");});
+  onState();
+})();
+
+async function onState(){
+  const c=cfg(); $("#srcHint").innerHTML='Live from <a href="'+c.portal+'" target="_blank" rel="noopener">'+c.name+'’s open data</a>.';
+  const fyS=$("#fyStart"),fyE=$("#fyEnd"); fyS.innerHTML="";fyE.innerHTML="";
+  try{
+    const fyc=fyCol(c);
+    const rows=await soql(c,"$select="+encodeURIComponent(fyc+" as fy")+"&$group="+encodeURIComponent(fyc)+"&$order="+encodeURIComponent(fyc+" DESC")+"&$limit=60");
+    const years=rows.map(r=>r.fy).filter(y=>y&&/^\d{4}/.test(String(y))).map(y=>String(y).slice(0,4));
+    const uniq=[...new Set(years)].sort().reverse();
+    uniq.forEach(y=>{fyS.add(new Option("FY"+y,y));fyE.add(new Option("FY"+y,y));});
+    if(uniq.length){fyE.value=uniq[0]; fyS.value=uniq[Math.min(4,uniq.length-1)];}
+  }catch(e){ [fyS,fyE].forEach(s=>{for(let y=2025;y>=2015;y--)s.add(new Option("FY"+y,y));}); }
+}
+
+function buildWhere(c,m){
+  const w=[]; const fyc=fyCol(c);
+  if(m.fyLo&&m.fyHi){ if(c.fyExpr) w.push(fyc+" between "+(+m.fyLo)+" and "+(+m.fyHi)); else w.push(fyc+" between '"+m.fyLo+"' and '"+m.fyHi+"'"); }
+  if(m.vendor) w.push("upper("+c.vendor+") like upper('%"+sq(m.vendor)+"%')");
+  if(m.agency) w.push("upper("+c.agency+") like upper('%"+sq(m.agency)+"%')");
+  return w.length?w.join(" AND "):"";
+}
+function whereParam(w){return w?"&$where="+encodeURIComponent(w):"";}
+
+async function run(){
+  const c=cfg();
+  const m={fyLo:$("#fyStart").value,fyHi:$("#fyEnd").value,vendor:$("#vendor").value.trim(),agency:$("#agency").value.trim()};
+  if(m.fyLo&&m.fyHi&&+m.fyLo>+m.fyHi){const t=m.fyLo;m.fyLo=m.fyHi;m.fyHi=t;}
+  setStatus('<span class="spin"></span>Querying '+esc(c.name)+'’s checkbook…'); $("#run").disabled=true;
+  try{
+    const W=buildWhere(c,m), wp=whereParam(W), fyc=fyCol(c);
+    const A=encodeURIComponent, amt=c.amount, ven=c.vendor;
+    const [tot,byYear,vendors,agencies,cats,tx]=await Promise.all([
+      soql(c,"$select="+A("sum("+amt+") as t, count(*) as n")+wp),
+      soql(c,"$select="+A(fyc+" as fy, sum("+amt+") as t")+"&$group="+A(fyc)+"&$order="+A(fyc)+wp+"&$limit=60"),
+      soql(c,"$select="+A(ven+" as name, sum("+amt+") as t, count(*) as n")+"&$group="+A(ven)+"&$order="+A("sum("+amt+") DESC")+"&$limit=25"+wp),
+      soql(c,"$select="+A(c.agency+" as name, sum("+amt+") as t")+"&$group="+A(c.agency)+"&$order="+A("sum("+amt+") DESC")+"&$limit=20"+wp),
+      c.category?soql(c,"$select="+A(c.category+" as name, sum("+amt+") as t")+"&$group="+A(c.category)+"&$order="+A("sum("+amt+") DESC")+"&$limit=20"+wp):Promise.resolve([]),
+      soql(c,txSelect(c)+"&$order="+A(amt+" DESC")+"&$limit=50"+wp)
+    ]);
+    REPORT={c,m,
+      total:+(tot[0]&&tot[0].t||0), count:+(tot[0]&&tot[0].n||0),
+      byYear:byYear.map(r=>({fy:String(r.fy).slice(0,4),t:+r.t})).filter(r=>/^\d{4}$/.test(r.fy)).sort((a,b)=>a.fy.localeCompare(b.fy)),
+      vendors:vendors.map(r=>({name:r.name,t:+r.t,n:+r.n})),
+      agencies:agencies.map(r=>({name:r.name,t:+r.t})),
+      cats:cats.map(r=>({name:r.name,t:+r.t})),
+      tx:tx
+    };
+    REPORT.flags=computeFlags(REPORT);
+    render(REPORT); setStatus(""); $("#report").style.display="block"; $("#report").scrollIntoView({behavior:"smooth"});
+  }catch(e){ setStatus("Error: "+e.message+". Try a narrower query or different years.",true); }
+  finally{ $("#run").disabled=false; }
+}
+function txSelect(c){
+  const cols=[c.vendor+" as vendor",c.amount+" as amount",c.agency+" as agency"];
+  if(c.category)cols.push(c.category+" as category");
+  if(c.desc)cols.push(c.desc+" as descr");
+  if(c.date)cols.push(c.date+" as dt");
+  if(c.city)cols.push(c.city+" as city");
+  return "$select="+encodeURIComponent(cols.join(", "));
+}
+function setStatus(h,e){const s=$("#status");s.innerHTML=h;s.className=e?"err":"";}
+
+const OPAQUE=/fiscal agent|summary trust|^\*$|payroll|retirement allowance|various|multiple|not applicable|^n\/a$|undisclosed/i;
+function computeFlags(R){
+  const flags=[],f=(s,t,d)=>flags.push({sev:s,title:t,desc:d});
+  const tot=R.total, vsum=R.vendors.reduce((s,v)=>s+v.t,0);
+  if(R.vendors.length){const top=R.vendors[0],sh=top.t/(tot||1);
+    if(sh>=.30)f("high","Single-recipient concentration",`${esc(top.name)} received ${pct(sh)} of tracked spending (${fmtShort(top.t)}).`);
+    else if(sh>=.15)f("med","Recipient concentration",`${esc(top.name)} received ${pct(sh)} (${fmtShort(top.t)}).`);}
+  const opaque=R.vendors.filter(v=>OPAQUE.test(v.name||"")).slice(0,5);
+  if(opaque.length)f("med","Opaque / internal payees in the top list",`Some of the largest "recipients" are internal transfers or fiscal-agent/pooled payments (${opaque.map(o=>esc(o.name)).join(", ")}) rather than outside vendors.`);
+  const y=[...R.byYear];
+  for(let i=1;i<y.length;i++){const p=y[i-1].t,c=y[i].t;if(p>0&&c/p>=1.5)f("med","Year-over-year surge",`FY${y[i].fy} rose ${pct(c/p-1)} vs FY${y[i-1].fy} (${fmtShort(p)} → ${fmtShort(c)}).`);}
+  if(!flags.length)f("low","No automated red flags","None of the heuristic checks tripped for this query.");
+  const o={high:0,med:1,low:2};flags.sort((a,b)=>o[a.sev]-o[b.sev]);return flags;
+}
+
+function render(R){
+  const c=R.c,m=R.m, tot=R.total;
+  const yr=R.byYear.length?("FY"+R.byYear[0].fy+"–FY"+R.byYear[R.byYear.length-1].fy):(m.fyLo?"FY"+m.fyLo+"–FY"+m.fyHi:"");
+  const card=(k,v,s)=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  $("#ovCards").innerHTML=[
+    card("State",esc(c.name),"state checkbook"),
+    card("Total spending",fmtShort(tot),fmt(tot)),
+    card("Payments",R.count.toLocaleString(),"records"),
+    card("Years",yr||"—",""),
+    card("Top recipient",R.vendors[0]?fmtShort(R.vendors[0].t):"—",R.vendors[0]?esc(R.vendors[0].name):""),
+    card("Red flags",String(R.flags.filter(f=>f.title!=="No automated red flags").length),R.flags.filter(f=>f.sev==="high").length+" high")
+  ].join("");
+  $("#ovQuery").innerHTML="Query: "+queryText(R)+" · live from "+esc(c.domain);
+  $("#lede").innerHTML=lede(R);
+
+  bar("ovTrend",R.byYear.map(r=>"FY"+r.fy),R.byYear.map(r=>r.t),"var(--obl)",false);
+  bar("rcChart",R.vendors.slice(0,15).map(v=>v.name),R.vendors.slice(0,15).map(v=>v.t),"var(--paid)",true);
+  $("#rcTable").innerHTML=tbl(["Recipient","Total","Payments","% of shown"],R.vendors.map(v=>[esc(v.name||"—"),fmt(v.t),(v.n||"").toLocaleString?v.n.toLocaleString():v.n,pct(v.t/(R.vendors.reduce((s,x)=>s+x.t,0)||1))]),[0,1,1,1]);
+  bar("agChart",R.agencies.slice(0,12).map(a=>a.name),R.agencies.slice(0,12).map(a=>a.t),"var(--obl)",true);
+  $("#agTable").innerHTML=tbl(["Agency","Total"],R.agencies.map(a=>[esc(a.name||"—"),fmt(a.t)]),[0,1]);
+  if(R.cats.length){bar("caChart",R.cats.slice(0,12).map(a=>a.name),R.cats.slice(0,12).map(a=>a.t),"var(--gold)",true);
+    $("#caTable").innerHTML=tbl(["Category","Total"],R.cats.map(a=>[esc(a.name||"—"),fmt(a.t)]),[0,1]);}
+  else{$("#caTable").innerHTML="<tbody><tr><td>No category field for this state.</td></tr></tbody>";destroy("caChart");}
+
+  const txcols=["Recipient","Agency"]; if(R.c.category)txcols.push("Category"); if(R.c.date)txcols.push("Date"); txcols.push("Amount");
+  $("#txTable").innerHTML=tbl(txcols, R.tx.map(t=>{const row=[esc(t.vendor||"—"),esc(t.agency||"")]; if(R.c.category)row.push(esc(t.category||"")); if(R.c.date)row.push(esc(String(t.dt||"").slice(0,10))); row.push(fmt(t.amount)); return row;}), txcols.map((h,i)=>i===txcols.length-1?1:0));
+
+  $("#flagList").innerHTML=R.flags.map(f=>`<div class="flag ${f.sev}"><div class="ft"><span class="sev ${f.sev}">${f.sev}</span> ${esc(f.title)}</div><div class="fd">${f.desc}</div></div>`).join("");
+  $("#srcFoot").innerHTML="Source: "+esc(c.name)+" — <a href='"+c.portal+"' target='_blank' rel='noopener'>"+esc(c.portal)+"</a> (Socrata dataset "+esc(c.id)+").";
+}
+function lede(R){
+  const c=R.c,m=R.m, who=m.vendor?'“'+esc(m.vendor)+'”':(m.agency?esc(m.agency):c.name);
+  let s=`Across ${R.byYear.length?("FY"+R.byYear[0].fy+"–FY"+R.byYear[R.byYear.length-1].fy):"the selected years"}, ${who} accounts for <b>${fmt(R.total)}</b> in ${esc(c.name)} state payments across <b>${R.count.toLocaleString()}</b> records. `;
+  if(R.vendors[0])s+=`Largest recipient: <b>${esc(R.vendors[0].name)}</b> (${fmtShort(R.vendors[0].t)}). `;
+  const hi=R.flags.filter(f=>f.sev==="high").length; if(hi)s+=`<span style="color:var(--sole)">${hi} high-severity flag${hi>1?"s":""}.</span>`;
+  return s;
+}
+function queryText(R){const m=R.m,p=[R.c.name];if(m.vendor)p.push('payee "'+esc(m.vendor)+'"');if(m.agency)p.push("agency "+esc(m.agency));if(m.fyLo)p.push("FY"+m.fyLo+"–FY"+m.fyHi);return p.join(" · ");}
+function tbl(head,rows,numCols){const th=head.map((h,i)=>`<th class="${numCols[i]?'num':''}">${h}</th>`).join("");const tr=rows.map(r=>"<tr>"+r.map((c,i)=>`<td class="${numCols[i]?'num':''}">${c}</td>`).join("")+"</tr>").join("");return `<thead><tr>${th}</tr></thead><tbody>${tr}</tbody>`;}
+
+function destroy(id){if(CHARTS[id]){CHARTS[id].destroy();delete CHARTS[id];}}
+const tickColor="#6f6151",gridColor="rgba(28,24,19,.10)";
+function axes(h){const money=function(v){return fmtShort(v);},label=function(v){return this.getLabelForValue(v);};return {x:{ticks:{color:tickColor,callback:h?money:label,maxRotation:0,autoSkip:true},grid:{color:gridColor}},y:{ticks:{color:tickColor,callback:h?label:money},grid:{color:gridColor}}};}
+function bar(id,labels,data,color,h){destroy(id);CHARTS[id]=new Chart($("#"+id),{type:"bar",data:{labels,datasets:[{data,backgroundColor:cssv(color),borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:h?"y":"x",plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmt(c.raw)}}},scales:axes(h)}});}
+function cssv(v){return v&&v.startsWith&&v.startsWith("var(")?getComputedStyle(document.body).getPropertyValue(v.slice(4,-1)).trim()||v:v;}
+
+function dl(fn,txt,mime){const b=new Blob([txt],{type:mime});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=fn;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
+function csvEsc(v){v=String(v==null?"":v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;}
+function exportCSV(kind){if(!REPORT)return;const R=REPORT;let h,rows,name;
+  if(kind==="vendors"){h=["Recipient","Total","Payments"];rows=R.vendors.map(v=>[v.name,v.t,v.n]);name=R.c.name.replace(/\s+/g,"-").toLowerCase()+"-recipients";}
+  dl("checkbook-"+name+".csv",[h.join(",")].concat(rows.map(r=>r.map(csvEsc).join(","))).join("\n"),"text/csv");}
+function exportJSON(){if(REPORT)dl("checkbook-"+REPORT.c.name.replace(/\s+/g,"-").toLowerCase()+".json",JSON.stringify({state:REPORT.c.name,query:REPORT.m,total:REPORT.total,count:REPORT.count,byYear:REPORT.byYear,vendors:REPORT.vendors,agencies:REPORT.agencies,categories:REPORT.cats,flags:REPORT.flags},null,2),"application/json");}
+
+(function(){var last=0;function H(){try{if(parent&&parent!==window){var h=document.body.scrollHeight;if(Math.abs(h-last)>2){last=h;parent.postMessage({__ftmusaHeight:h},"*");}}}catch(e){}}
+if(window.ResizeObserver){try{new ResizeObserver(H).observe(document.body);}catch(e){}}window.addEventListener("load",H);window.addEventListener("resize",H);setInterval(H,800);})();
+</script>
+<script>
+/* ===== Analysis Document builder (shared, DOM-driven) ===== */
+var ADOC_CSS='*{box-sizing:border-box}body{margin:0;background:#F4EEE1;color:#1C1813;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55}.adoc-wrap{max-width:900px;margin:0 auto;padding:40px 30px}.adoc-head{border-bottom:3px solid #BE4A1F;padding-bottom:16px;margin-bottom:22px}.adoc-kick{font-family:"Spline Sans Mono",monospace;font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:#BE4A1F;font-weight:600}.adoc-head h1{font-family:"Fraunces",Georgia,serif;font-weight:900;font-size:32px;margin:8px 0 6px;line-height:1.1}.adoc-meta{font-family:"Spline Sans Mono",monospace;font-size:12px;color:#6f6151}.adoc-notes{background:#FBF7EE;border:1px solid #d8cab0;border-left:4px solid #B5872C;border-radius:10px;padding:16px 20px;margin-bottom:24px}.adoc-notes h2{font-family:"Fraunces",Georgia,serif;margin:0 0 8px;font-size:18px}.adoc-notes p{margin:0;font-size:15px;white-space:pre-wrap}.adoc-report .sect-title{font-family:"Spline Sans Mono",monospace;font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:#BE4A1F;font-weight:600;margin:26px 0 10px}.adoc-report h3{font-family:"Fraunces",Georgia,serif;font-size:18px;margin:20px 0 8px}.adoc-report .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 20px}.adoc-report .card{border:1px solid #d8cab0;border-radius:10px;padding:12px;background:#FBF7EE}.adoc-report .card .k{font-family:"Spline Sans Mono",monospace;font-size:10.5px;text-transform:uppercase;color:#6f6151}.adoc-report .card .v{font-family:"Fraunces",Georgia,serif;font-weight:800;font-size:20px;margin-top:4px}.adoc-report .card .s{font-size:11.5px;color:#6f6151;margin-top:2px}.adoc-report table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0 14px}.adoc-report th,.adoc-report td{border:1px solid #e0d4bd;padding:6px 8px;text-align:left;vertical-align:top}.adoc-report th{background:#F0E7D4;font-family:"Spline Sans Mono",monospace;font-size:10px;text-transform:uppercase;color:#6f6151}.adoc-report .flag{border:1px solid #d8cab0;border-left:4px solid #BE4A1F;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#FBF7EE}.adoc-report .lede{font-family:"Fraunces",Georgia,serif;font-size:16px;background:#FBF7EE;border:1px solid #d8cab0;border-left:4px solid #BE4A1F;border-radius:10px;padding:12px 16px;margin-bottom:18px}.adoc-report img{max-width:100%;border:1px solid #d8cab0;border-radius:8px;margin:6px 0 16px;background:#fff}.adoc-report .legend,.adoc-report .corrkey,.adoc-report .exp,.adoc-report button{display:none!important}.adoc-report .sub,.adoc-report .hint{color:#6f6151;font-size:12px}.adoc-foot{margin-top:26px;padding-top:14px;border-top:1px solid #d8cab0;color:#6f6151;font-size:11.5px}.adoc-actions{margin-top:20px;text-align:center}.adoc-actions button{background:#BE4A1F;color:#fff;border:0;border-radius:30px;padding:10px 22px;font-weight:600;cursor:pointer}@media print{.noprint{display:none!important}body{background:#fff}.adoc-wrap{max-width:none;padding:0}}';
+function escA(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+function analysisDoc(){
+  var rep=document.querySelector("#report"); if(!rep||rep.style.display==="none"){alert("Run a search first, then build your analysis document.");return;}
+  var p=document.getElementById("adocPanel");
+  if(p){p.style.display=p.style.display==="none"?"block":"none";if(p.style.display==="block")p.scrollIntoView({behavior:"smooth"});return;}
+  p=document.createElement("div"); p.id="adocPanel";
+  p.setAttribute("style","background:var(--panel,#FBF7EE);border:1px solid var(--border,#d8cab0);border-left:4px solid var(--hum,#BE4A1F);border-radius:12px;padding:16px 18px;margin-bottom:18px");
+  var L='font-family:var(--mono,monospace);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#6f6151);display:block;margin-bottom:4px;font-weight:600';
+  var I='width:100%;padding:9px 10px;margin-bottom:12px;border:1px solid var(--border,#d8cab0);border-radius:8px;background:var(--bg,#F4EEE1);color:inherit;font-size:14px;font-family:inherit';
+  p.innerHTML='<div style="font-family:var(--serif,Georgia,serif);font-weight:800;font-size:18px;margin-bottom:10px">📄 Build an analysis document</div>'
+   +'<label style="'+L+'">Title</label><input id="adocTitle" style="'+I+'">'
+   +'<label style="'+L+'">By (optional)</label><input id="adocAuthor" placeholder="Your name" style="'+I+'">'
+   +'<label style="'+L+'">Your analysis / notes</label><textarea id="adocNotes" rows="5" placeholder="What does the data show? What stands out? What should readers investigate?" style="'+I+';resize:vertical"></textarea>'
+   +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+   +'<button onclick="adocBuild(\'html\')" style="background:var(--hum,#BE4A1F);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer">⬇ Download report (HTML)</button>'
+   +'<button onclick="adocBuild(\'md\')" style="background:var(--panel2,#F0E7D4);border:1px solid var(--border,#d8cab0);border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer;color:inherit">⬇ Markdown</button>'
+   +'<button onclick="document.getElementById(\'adocPanel\').style.display=\'none\'" style="background:transparent;border:1px solid var(--border,#d8cab0);border-radius:8px;padding:10px 16px;cursor:pointer;color:inherit">Hide</button>'
+   +'<span style="color:var(--muted,#6f6151);font-size:12px">Bundles your notes with the current data, charts &amp; sources.</span></div>';
+  var tb=rep.querySelector(".toolbar"); if(tb&&tb.parentNode)tb.parentNode.insertBefore(p,tb.nextSibling); else rep.insertBefore(p,rep.firstChild);
+  var h1=document.querySelector("header.app h1"); document.getElementById("adocTitle").value=(h1?h1.textContent.replace(/\s+/g," ").trim():"State checkbook")+" — analysis";
+}
+function adocBuild(kind){
+  var rep=document.querySelector("#report");
+  var t=(document.getElementById("adocTitle")||{}).value||"Analysis";
+  var au=(document.getElementById("adocAuthor")||{}).value||"";
+  var nt=(document.getElementById("adocNotes")||{}).value||"";
+  var date=new Date().toISOString().slice(0,10);
+  var foot=document.querySelector("footer")?document.querySelector("footer").innerText.replace(/\s+/g," ").trim():"";
+  var fn="analysis-"+(t.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48)||"document");
+  if(kind==="md"){
+    var md="# "+t+"\n\n"+(au?"*By "+au+" — "+date+"*\n\n":"*"+date+"*\n\n");
+    if(nt)md+="## Analysis\n\n"+nt+"\n\n";
+    var lede=rep.querySelector("#lede"); if(lede)md+="> "+lede.innerText.replace(/\s+/g," ").trim()+"\n\n";
+    rep.querySelectorAll(".panel").forEach(function(pan){var ttl=pan.querySelector(".sect-title,h3");var tb2=pan.querySelector("table");if(tb2){if(ttl)md+="## "+ttl.innerText.trim()+"\n\n";md+=adocTableMd(tb2)+"\n\n";}});
+    var fl=rep.querySelectorAll("#flagList .flag"); if(fl.length){md+="## Red flags\n\n";fl.forEach(function(f){md+="- "+f.innerText.replace(/\s+/g," ").trim()+"\n";});md+="\n";}
+    md+="---\n"+foot+"\n";
+    dl(fn+".md",md,"text/markdown"); return;
+  }
+  var clone=rep.cloneNode(true);
+  clone.querySelectorAll(".toolbar,.tabs,#adocPanel").forEach(function(e){e.remove();});
+  clone.querySelectorAll(".panel").forEach(function(pn){pn.style.display="block";});
+  clone.querySelectorAll("details").forEach(function(d){d.setAttribute("open","");});
+  var live=rep.querySelectorAll("canvas"), cc=clone.querySelectorAll("canvas");
+  for(var i=0;i<cc.length;i++){try{var u=live[i].toDataURL("image/png",1);var im=document.createElement("img");im.src=u;cc[i].parentNode.replaceChild(im,cc[i]);}catch(e){if(cc[i].parentNode)cc[i].remove();}}
+  var notes=nt?'<div class="adoc-notes"><h2>Analysis</h2><p>'+escA(nt)+'</p></div>':"";
+  var doc='<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escA(t)+'</title>'
+    +'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..900&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet"><style>'+ADOC_CSS+'</style></head><body><div class="adoc-wrap">'
+    +'<div class="adoc-head"><div class="adoc-kick">Follow the Money · Analysis</div><h1>'+escA(t)+'</h1><div class="adoc-meta">'+(au?escA(au)+" · ":"")+date+'</div></div>'
+    +notes+'<div class="adoc-report">'+clone.innerHTML+'</div>'
+    +'<div class="adoc-foot">'+escA(foot)+'</div>'
+    +'<div class="adoc-actions noprint"><button onclick="window.print()">Print / Save as PDF</button></div>'
+    +'</div></body></html>';
+  dl(fn+".html",doc,"text/html");
+}
+function adocTableMd(tb){var out=[];var rows=tb.querySelectorAll("tr");for(var i=0;i<rows.length;i++){var cs=rows[i].querySelectorAll("th,td");if(!cs.length)continue;var arr=[];for(var j=0;j<cs.length;j++)arr.push(cs[j].innerText.replace(/\|/g,"/").replace(/\s+/g," ").trim());out.push("| "+arr.join(" | ")+" |");if(i===0)out.push("|"+arr.map(function(){return "---";}).join("|")+"|");}return out.join("\n");}
+</script>
+</body>
+</html>
