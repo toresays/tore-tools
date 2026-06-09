@@ -179,7 +179,11 @@ const STATES={
   MAWOR:{group:"Massachusetts",name:"— Worcester",platform:"arcgis",fyData:{"2026":"https://services1.arcgis.com/j8dqo2DJE7mVUBU1/arcgis/rest/services/Open_Checkbook_FY26/FeatureServer/0","2025":"https://services1.arcgis.com/j8dqo2DJE7mVUBU1/arcgis/rest/services/Fiscal_Year_2025_Open_Checkbook/FeatureServer/0","2024":"https://services1.arcgis.com/j8dqo2DJE7mVUBU1/arcgis/rest/services/Open_Checkbook_FY24_/FeatureServer/0"},vendor:"Payee",amount:"Pmt_Amount",agency:"Departments",category:"Spend_Categories",date:"Pmt_Date",portal:"https://opendata.worcesterma.gov"},
   NJ:{group:"New Jersey",name:"State of New Jersey",platform:"socrata",domain:"data.nj.gov",id:"apet-rp2i",vendor:"payee_name",amount:"expended_amt",fy:"budget_fiscal_year",agency:"ibno_agency",category:"expenditure_category",desc:"expenditure_desc",portal:"https://www.yourmoney.nj.gov/"},
   OR:{group:"Oregon",name:"State of Oregon",platform:"socrata",domain:"data.oregon.gov",id:"y9g9-xsxs",vendor:"vendor",amount:"expense",fy:"fiscal_year",agency:"agency_1",category:"expend_class_1",portal:"https://www.oregon.gov/transparency/Pages/Checkbook.aspx"},
-  VT:{group:"Vermont",name:"State of Vermont",platform:"socrata",domain:"data.vermont.gov",id:"p5kg-p2h8",vendor:"vendor",amount:"amt",fyExpr:"date_extract_y(qtrending)",agency:"govtunit",category:"account",desc:"description",date:"qtrending",portal:"https://spotlight.vermont.gov/"}
+  VT:{group:"Vermont",name:"State of Vermont",platform:"socrata",domain:"data.vermont.gov",id:"p5kg-p2h8",vendor:"vendor",amount:"amt",fyExpr:"date_extract_y(qtrending)",agency:"govtunit",category:"account",desc:"description",date:"qtrending",portal:"https://spotlight.vermont.gov/"},
+  CT:{group:"Connecticut",name:"State of Connecticut",platform:"socrata",domain:"data.ct.gov",id:"4b3c-3g3a",vendor:"vendor",amount:"amount",fy:"fiscal_year",agency:"department",category:"expense_category",date:"payment_date",portal:"https://openbudget.ct.gov/"},
+  CALA:{group:"California",name:"— Los Angeles",platform:"socrata",domain:"controllerdata.lacity.org",id:"pggv-e4fn",vendor:"vendor_name",amount:"dollar_amount",fy:"fiscal_year",agency:"department_name",category:"expenditure_type",date:"transaction_date",portal:"https://controllerdata.lacity.org/d/pggv-e4fn"},
+  ILCHI:{group:"Illinois",name:"— Chicago",platform:"socrata",domain:"data.cityofchicago.org",id:"s4vu-giwb",vendor:"vendor_name",amount:"amount",fyExpr:"substring(check_date,1,4)",fyQuote:true,date:"check_date",portal:"https://data.cityofchicago.org/d/s4vu-giwb",note:"City of Chicago payments; no agency/category fields published in this dataset."},
+  TXDAL:{group:"Texas",name:"— Dallas",platform:"socrata",domain:"www.dallasopendata.com",id:"x5ih-idh7",vendor:"vendor",amount:"chksubtot",fy:"fy",agency:"department",category:"objectgroup",desc:"commoditydscr",date:"rundate",portal:"https://www.dallasopendata.com/d/x5ih-idh7",note:"Dallas posts the current biennium (FY2025–present)."}
 };
 
 let REPORT=null, CHARTS={};
@@ -246,7 +250,7 @@ async function repSocrata(c,m){
   const base="https://"+c.domain+"/resource/"+c.id+".json?";
   const fyc=c.fyExpr||c.fy, amt=c.amount, ven=c.vendor;
   const w=[];
-  if(c.fyExpr) w.push(fyc+" between "+(+m.fyLo)+" and "+(+m.fyHi)); else w.push(fyc+" between '"+m.fyLo+"' and '"+m.fyHi+"'");
+  if(c.fyExpr&&!c.fyQuote) w.push(fyc+" between "+(+m.fyLo)+" and "+(+m.fyHi)); else w.push(fyc+" between '"+m.fyLo+"' and '"+m.fyHi+"'");
   if(m.vendor) w.push("upper("+ven+") like upper('%"+sq(m.vendor)+"%')");
   if(m.agency&&c.agency) w.push("upper("+c.agency+") like upper('%"+sq(m.agency)+"%')");
   const wp="&$where="+A(w.join(" AND "));
@@ -343,14 +347,15 @@ async function perYearTotals(c,m,getter){
   return out.filter(r=>r.t).sort((a,b)=>a.fy.localeCompare(b.fy));
 }
 
+function named(rows){return (rows||[]).filter(r=>r.name!=null&&String(r.name).trim()!==""&&isFinite(r.t));}
 function norm(tot,byYear,vendors,agencies,cats,tx){
   return {
     total:+(tot&&tot.t||0), count:+(tot&&tot.n||0),
-    byYear:(byYear||[]).map(r=>({fy:String(r.fy).slice(0,4),t:+r.t})).filter(r=>/^\d{4}$/.test(r.fy)),
-    vendors:(vendors||[]).map(r=>({name:r.name,t:+r.t,n:r.n!=null?+r.n:null})),
-    agencies:(agencies||[]).map(r=>({name:r.name,t:+r.t})),
-    cats:(cats||[]).map(r=>({name:r.name,t:+r.t})),
-    tx:tx||[]
+    byYear:(byYear||[]).map(r=>({fy:String(r.fy).slice(0,4),t:+r.t})).filter(r=>/^\d{4}$/.test(r.fy)&&isFinite(r.t)),
+    vendors:named((vendors||[]).map(r=>({name:r.name,t:+r.t,n:r.n!=null?+r.n:null}))),
+    agencies:named((agencies||[]).map(r=>({name:r.name,t:+r.t}))),
+    cats:named((cats||[]).map(r=>({name:r.name,t:+r.t}))),
+    tx:(tx||[]).filter(t=>isFinite(t.amount))
   };
 }
 const ADAPT={socrata:repSocrata,socrata_fy:repSocrataFy,ckan:repCkan,arcgis:repArcgis};

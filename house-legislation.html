@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Read the Bills — U.S. House Legislation Tracker</title>
+<!--
+  READ THE BILLS — every measure in the U.S. House of Representatives, searchable by the public,
+  with a plain-English "trap & vague-verbiage" detector.
+
+  DATA: 100% client-side. Live from the official Library of Congress API (api.congress.gov, CORS-open)
+        + the bill text files on congress.gov (also CORS-open). No backend for browsing or analysis.
+
+  TWO KEYS YOU MAY WANT TO SET:
+   1) CONGRESS API KEY  — free, instant at https://api.congress.gov/sign-up/ (5,000 req/hr).
+        Replace EMBEDDED_KEY below, OR users can paste their own via the ⚙ button (saved in their browser).
+        DEMO_KEY works but is throttled to ~10 req/hr — fine for a quick look, not for the public.
+   2) AI_WORKER_URL     — optional. URL of the tiny Cloudflare Worker (see ai-worker.js) that holds the
+        Anthropic key and relays the Claude deep-dive. Leave "" and the rules engine still works fully;
+        the AI panel just shows setup instructions.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..600&family=Spline+Sans+Mono:wght@400..700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#F4EEE1;--panel:#FBF7EE;--panel2:#F0E7D4;--border:#d8cab0;--text:#1C1813;--muted:#6f6151;--hum:#BE4A1F;--obl:#1B5A50;--gold:#B5872C;--sole:#b30000;--dem:#1f5fa8;--rep:#b3261e;--ind:#6a5acd;--serif:'Fraunces',Georgia,serif;--mono:'Spline Sans Mono',ui-monospace,monospace;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55;font-size:15px}
+  a{color:var(--obl);text-decoration:none} a:hover{text-decoration:underline}
+  header.app{padding:30px 20px 24px;text-align:center;border-bottom:1px solid var(--border);background:var(--bg);position:relative}
+  header.app::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,var(--hum),var(--gold) 55%,var(--obl))}
+  header.app .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--hum);font-weight:600}
+  header.app h1{font-family:var(--serif);font-weight:900;margin:8px 0 0;font-size:clamp(28px,5vw,46px);letter-spacing:-.02em}
+  header.app h1 .em{color:var(--hum)}
+  header.app p{font-family:var(--serif);font-style:italic;margin:12px auto 0;color:#4f4536;font-size:clamp(15px,2vw,18px);max-width:760px}
+  .gear{position:absolute;top:14px;right:16px;font-size:13px;font-family:var(--mono);color:var(--muted);background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:5px 12px;cursor:pointer}
+  .gear:hover{border-color:var(--hum)}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px}
+  .search{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:5px;font-weight:700;font-family:var(--mono)}
+  .field input,.field select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);font-size:14px}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--hum)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
+  button{cursor:pointer;font-size:14px;font-weight:600;border-radius:8px;padding:10px 18px;border:1px solid var(--border);background:var(--panel2);color:var(--text);transition:.12s}
+  button:hover{border-color:var(--hum)}
+  button.primary{background:var(--hum);color:#fff;border-color:var(--hum)}
+  button.ghost{background:transparent;font-weight:500}
+  .hint{color:var(--muted);font-size:12.5px}
+  #status{margin:16px 0;min-height:20px;font-size:14px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--border);border-top-color:var(--hum);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{color:var(--sole)}
+  .vtabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:10px 0 18px}
+  .vtab{font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;padding:10px 14px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);font-weight:600;cursor:pointer}
+  .vtab.active{color:var(--text);border-bottom-color:var(--hum)}
+  .view{display:none} .view.active{display:block}
+  /* bill rows */
+  .countbar{font-family:var(--mono);font-size:12px;color:var(--muted);margin:0 0 12px}
+  .bill{display:flex;gap:14px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px;box-shadow:0 12px 28px -24px rgba(28,24,19,.5);cursor:pointer;transition:.12s}
+  .bill:hover{border-color:var(--hum);transform:translateY(-1px)}
+  .bill .bnum{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--hum);min-width:96px;flex:0 0 96px}
+  .bill .bmain{flex:1;min-width:0}
+  .bill .btitle{font-family:var(--serif);font-weight:700;font-size:17px;line-height:1.25;margin-bottom:5px}
+  .bill .bmeta{font-size:12.5px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .bill .blatest{font-size:12.5px;color:var(--muted);margin-top:5px}
+  .bside{flex:0 0 150px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;text-align:right}
+  .pill{font-family:var(--mono);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .st0{background:#eee3cc;color:#7a6a4a}.st1{background:#e7ddc6;color:#6f6151}
+  .st2{background:rgba(181,135,44,.2);color:#8a6a1f}.st3{background:rgba(31,95,168,.16);color:#1f5fa8}
+  .st4{background:rgba(31,95,168,.22);color:#16467d}.st5{background:rgba(27,90,80,.16);color:var(--obl)}
+  .st6{background:rgba(10,122,42,.18);color:#0a7a2a}.stx{background:rgba(179,0,0,.12);color:var(--sole)}
+  .partytag{font-family:var(--mono);font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px}
+  .pD{background:rgba(31,95,168,.15);color:var(--dem)}.pR{background:rgba(179,38,30,.13);color:var(--rep)}.pI{background:rgba(106,90,205,.14);color:var(--ind)}
+  .chip{font-family:var(--mono);font-size:11px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:1px 8px;color:var(--muted)}
+  .loadmore{display:block;margin:8px auto 0;}
+  /* modal */
+  .overlay{position:fixed;inset:0;background:rgba(28,24,19,.55);display:none;z-index:50;backdrop-filter:blur(2px)}
+  .overlay.open{display:block}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:min(860px,96vw);background:var(--bg);box-shadow:-20px 0 60px -20px rgba(0,0,0,.5);overflow-y:auto;z-index:51;transform:translateX(100%);transition:transform .22s ease}
+  .drawer.open{transform:translateX(0)}
+  .dhead{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);padding:18px 22px;z-index:2}
+  .dhead .x{position:absolute;top:14px;right:16px;font-size:22px;line-height:1;background:none;border:none;color:var(--muted);cursor:pointer;padding:4px 8px}
+  .dhead .dnum{font-family:var(--mono);font-size:13px;color:var(--hum);font-weight:700}
+  .dhead h2{font-family:var(--serif);font-weight:800;font-size:23px;margin:6px 40px 8px 0;line-height:1.18}
+  .dbody{padding:18px 22px 60px}
+  .dtabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin:0 0 16px}
+  .dtab{font-family:var(--mono);font-size:12px;padding:9px 12px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);font-weight:600;cursor:pointer}
+  .dtab.active{color:var(--text);border-bottom-color:var(--hum)}
+  .dpanel{display:none}.dpanel.active{display:block}
+  .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .kv .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px}
+  .kv .k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  .kv .v{font-family:var(--serif);font-size:17px;font-weight:700;margin-top:5px;line-height:1.25}
+  .sect-title{font-family:var(--mono);font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--hum);margin:18px 0 10px;font-weight:600}
+  /* timeline */
+  .tl{list-style:none;margin:0;padding:0;position:relative}
+  .tl::before{content:"";position:absolute;left:7px;top:4px;bottom:4px;width:2px;background:var(--border)}
+  .tl li{position:relative;padding:0 0 14px 28px}
+  .tl li::before{content:"";position:absolute;left:2px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--panel2);border:2px solid var(--gold)}
+  .tl li.big::before{background:var(--hum);border-color:var(--hum)}
+  .tl .td{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .tl .tt{font-size:13.5px;margin-top:2px}
+  /* analyzer */
+  .scorebox{display:flex;gap:16px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px}
+  .scoredial{font-family:var(--serif);font-weight:900;font-size:40px;line-height:1}
+  .flag{border-radius:10px;padding:13px 15px;margin-bottom:10px;border:1px solid var(--border);background:var(--panel)}
+  .flag.high{border-left:4px solid var(--sole)}.flag.med{border-left:4px solid var(--gold)}.flag.low{border-left:4px solid var(--obl)}.flag.info{border-left:4px solid var(--muted)}
+  .flag .ft{font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .flag .sev{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:10px}
+  .sev.high{background:rgba(179,0,0,.12);color:var(--sole)}.sev.med{background:rgba(181,135,44,.2);color:#8a6a1f}.sev.low{background:rgba(27,90,80,.14);color:var(--obl)}.sev.info{background:rgba(111,97,81,.14);color:var(--muted)}
+  .flag .cnt{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .flag .fd{color:var(--muted);font-size:13px;margin:3px 0 6px}
+  .flag .ex{font-family:var(--mono);font-size:12px;background:var(--panel2);border-radius:6px;padding:6px 9px;margin-top:5px;white-space:pre-wrap;word-break:break-word}
+  .flag .ex mark{background:rgba(190,74,31,.28);color:inherit;padding:0 2px;border-radius:3px}
+  .textbox{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;max-height:520px;overflow:auto;font-size:13.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+  .textbox mark.h{background:rgba(179,0,0,.22)}.textbox mark.m{background:rgba(181,135,44,.3)}.textbox mark.l{background:rgba(27,90,80,.22)}.textbox mark.i{background:rgba(111,97,81,.18)}
+  .ai-out{background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--hum);border-radius:10px;padding:16px 18px;margin-top:10px}
+  .ai-out h4{font-family:var(--serif);margin:14px 0 6px;font-size:16px}
+  .setupbox{background:var(--panel2);border:1px dashed var(--border);border-radius:10px;padding:14px 16px;font-size:13px}
+  .setupbox code{background:var(--bg);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+  .toolbar button{padding:7px 12px;font-size:13px;font-weight:500}
+  footer{color:var(--muted);font-size:12px;padding:26px 16px 60px;border-top:1px solid var(--border);margin-top:30px}
+  footer b{color:var(--text)}
+  .guide{max-width:760px}
+  .guide h3{font-family:var(--serif);font-size:19px;margin:20px 0 6px}
+  .guide p{margin:0 0 10px}
+  .guide .pe{font-family:var(--mono);font-size:13px;background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--hum);border-radius:6px;padding:8px 11px;margin:6px 0}
+  @media (max-width:680px){.bill{flex-wrap:wrap}.bside{flex-basis:100%;flex-direction:row;align-items:center;text-align:left}.bill .bnum{flex-basis:auto}}
+</style>
+</head>
+<body>
+<header class="app">
+  <button class="gear" onclick="setKey()" title="Set your Congress.gov API key">⚙ API key</button>
+  <div class="kicker">Tore Tools · The People's Legislature</div>
+  <h1>Read the <span class="em">Bills</span></h1>
+  <p>Every measure moving through the U.S. House — searchable by party, representative, status, subject and date,
+     pulled live from the official Library of Congress record. Open any bill to read it in full and run the
+     <b>trap &amp; vague-verbiage detector</b> that flags the language Congress hopes you'll skip.</p>
+</header>
+
+<div class="wrap">
+  <div class="search">
+    <div class="grid">
+      <div class="field"><label for="btype">Measure type</label><select id="btype">
+        <option value="hr">House Bills (H.R.)</option>
+        <option value="hres">House Resolutions (H.Res.)</option>
+        <option value="hjres">House Joint Resolutions (H.J.Res.)</option>
+        <option value="hconres">House Concurrent Res. (H.Con.Res.)</option>
+      </select></div>
+      <div class="field"><label for="statusSel">Status</label><select id="statusSel">
+        <option value="">Any status</option>
+        <option value="6">Became law</option>
+        <option value="5">Passed both chambers / to President</option>
+        <option value="4">Passed Senate</option>
+        <option value="3">Passed House</option>
+        <option value="2">Reported / on calendar</option>
+        <option value="1">In committee</option>
+        <option value="0">Introduced</option>
+        <option value="x">Failed / blocked</option>
+      </select></div>
+      <div class="field"><label for="party">Sponsor party</label><select id="party">
+        <option value="">Any party</option>
+        <option value="D">Democratic</option>
+        <option value="R">Republican</option>
+        <option value="I">Independent</option>
+      </select></div>
+      <div class="field"><label for="sponsor">Representative</label><input id="sponsor" list="memberList" placeholder="type a name — e.g. Jeffries"><datalist id="memberList"></datalist></div>
+      <div class="field"><label for="kw">Keyword in title</label><input id="kw" placeholder="e.g. fraud, tax, border"></div>
+      <div class="field"><label for="jump">Jump to a bill #</label><input id="jump" placeholder="e.g. 8312"></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="run">Search bills</button>
+      <button class="ghost" id="reset">Reset</button>
+      <span class="hint" id="srcHint">Live from the Library of Congress · 119th Congress</span>
+    </div>
+  </div>
+
+  <div class="vtabs">
+    <button class="vtab active" data-v="browse">Browse &amp; Search</button>
+    <button class="vtab" data-v="week">House This Week</button>
+    <button class="vtab" data-v="guide">How to read a bill</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="view active" data-v="browse">
+    <div class="countbar" id="countbar"></div>
+    <div id="results"></div>
+    <button class="ghost loadmore" id="loadmore" style="display:none">Load more bills</button>
+  </div>
+
+  <div class="view" data-v="week">
+    <p class="hint">The most recent floor and committee activity in the House — bills that moved in roughly the last two weeks.
+       For the official schedule see <a href="https://docs.house.gov" target="_blank" rel="noopener">docs.house.gov</a> and the
+       <a href="https://www.majorityleader.gov/schedule" target="_blank" rel="noopener">floor schedule</a>.</p>
+    <div id="weekList"></div>
+  </div>
+
+  <div class="view guide" data-v="guide">
+    <h3>How a bill becomes law — and where the traps hide</h3>
+    <p>Most bills die quietly in committee. The few that move pass through stages, and watching the <b>status</b> tells you how close
+       a measure is to becoming binding law: <i>Introduced → In committee → Reported → Passed House → Passed Senate → To the President → Law.</i></p>
+    <h3>Phrases the detector watches for</h3>
+    <p>Legislation has a vocabulary for hiding power, cost and consequences. A few of the big ones:</p>
+    <div class="pe">"notwithstanding any other provision of law" — quietly overrides every other law that might limit a provision.</div>
+    <div class="pe">"such sums as may be necessary" — authorizes spending with no dollar cap.</div>
+    <div class="pe">"in the sole discretion of the Secretary" — hands one official broad, often unreviewable power.</div>
+    <div class="pe">"shall not be subject to judicial review" — strips the courts' ability to check the action.</div>
+    <div class="pe">"is amended by striking … inserting …" — changes existing law by reference, so the real effect is invisible unless you read it against current law.</div>
+    <p>Open any bill and switch to the <b>Analyzer</b> tab to see every instance highlighted in the actual text, with a plain-English
+       note on why it matters. The detector points you to language worth a closer look — it is a reading aid, not a verdict.</p>
+  </div>
+</div>
+
+<!-- Bill detail drawer -->
+<div class="overlay" id="overlay" onclick="closeBill()"></div>
+<aside class="drawer" id="drawer" aria-label="Bill detail">
+  <div class="dhead">
+    <button class="x" onclick="closeBill()" aria-label="Close">×</button>
+    <div class="dnum" id="dNum"></div>
+    <h2 id="dTitle"></h2>
+    <div id="dSub" class="hint"></div>
+  </div>
+  <div class="dbody">
+    <div class="dtabs">
+      <button class="dtab active" data-d="ov">Overview</button>
+      <button class="dtab" data-d="tl">Timeline</button>
+      <button class="dtab" data-d="an">Analyzer</button>
+      <button class="dtab" data-d="more">Subjects &amp; Money</button>
+    </div>
+    <div class="dpanel active" data-d="ov" id="pOv"></div>
+    <div class="dpanel" data-d="tl" id="pTl"></div>
+    <div class="dpanel" data-d="an" id="pAn"></div>
+    <div class="dpanel" data-d="more" id="pMore"></div>
+  </div>
+</aside>
+
+<footer>
+  <p><b>About this tool.</b> Bill data comes live from the official <a href="https://api.congress.gov" target="_blank" rel="noopener">Library of Congress / Congress.gov API</a>
+  and bill text from congress.gov. Nothing here is editorialized at the source — the words are Congress's own.
+  The <b>trap &amp; vague-verbiage detector</b> uses transparent keyword rules to flag language that commonly hides cost,
+  power, or consequences; it highlights things <i>worth reading carefully</i> and is not an accusation of wrongdoing. The optional
+  AI deep-dive is generated by a language model and can make mistakes — always read the bill text yourself.</p>
+  <p class="hint" id="srcFoot"></p>
+</footer>
+
+<script>
+"use strict";
+/* ============================ CONFIG ============================ */
+const CONGRESS = 119;                       // current Congress
+const API = "https://api.congress.gov/v3";
+const EMBEDDED_KEY = "DEMO_KEY";            // ← replace with your free api.congress.gov key before public launch
+const AI_WORKER_URL = "";                   // ← set to your Cloudflare Worker URL to enable the Claude deep-dive
+const PAGE = 40;                            // bills per page in browse mode
+
+let API_KEY = localStorage.getItem("tore_congress_key") || EMBEDDED_KEY;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const A=encodeURIComponent;
+function key(){return "api_key="+encodeURIComponent(API_KEY);}
+async function getJSON(url){const sep=url.indexOf("?")>=0?"&":"?";const r=await fetch(url+sep+key());if(!r.ok)throw new Error("HTTP "+r.status+(r.status===429?" — API rate limit. Set your own key with the ⚙ button.":""));return r.json();}
+
+function setKey(){
+  const cur=localStorage.getItem("tore_congress_key")||"";
+  const v=prompt("Paste your free Congress.gov API key (get one at api.congress.gov/sign-up).\nLeave blank to use the built-in key.",cur);
+  if(v===null)return;
+  if(v.trim()){localStorage.setItem("tore_congress_key",v.trim());API_KEY=v.trim();alert("Saved. Your key is stored only in this browser.");}
+  else{localStorage.removeItem("tore_congress_key");API_KEY=EMBEDDED_KEY;alert("Cleared — using the built-in key.");}
+}
+
+/* ============================ STATUS / STAGE ============================ */
+function stageOf(text){
+  const t=(text||"").toLowerCase();
+  if(/became (public|private) law|enacted/.test(t))return 6;
+  if(/veto/.test(t))return 5;
+  if(/presented to president|signed by president|cleared for white house/.test(t))return 5;
+  if(/passed\/agreed to in senate|passed senate|agreed to in senate/.test(t))return 4;
+  if(/passed\/agreed to in house|passed house|on passage[ ,].*passed|agreed to in house|motion to recommit/.test(t))return 3;
+  if(/reported|placed on .*calendar|ordered to be reported|rules committee|union calendar|discharged/.test(t))return 2;
+  if(/referred to|received in|committee on|markup|hearings? held|sponsor introductory/.test(t))return 1;
+  if(/introduced|read twice/.test(t))return 0;
+  if(/failed|rejected|tabled|withdrawn|postponed indefinitely/.test(t))return -1;
+  return 1;
+}
+const STAGE_LABEL={"-1":"Failed / blocked",0:"Introduced",1:"In committee",2:"Reported / calendar",3:"Passed House",4:"Passed Senate",5:"To President",6:"Became law"};
+function stageClass(s){return s<0?"stx":("st"+s);}
+function typeLabel(t){return {hr:"H.R.",hres:"H.Res.",hjres:"H.J.Res.",hconres:"H.Con.Res.",s:"S.",sres:"S.Res."}[String(t).toLowerCase()]||String(t).toUpperCase();}
+function fmtDate(d){if(!d)return "";const x=new Date(d);return isNaN(x)?String(d).slice(0,10):x.toLocaleDateString("en-US",{year:"numeric",month:"short",day:"numeric"});}
+
+/* ============================ STATE ============================ */
+let STATE={items:[], offset:0, mode:"list", member:null, enriching:false};
+const detailCache=new Map();   // billKey -> detail json
+const textCache=new Map();     // textUrl -> plain text
+
+/* ============================ INIT ============================ */
+(function(){
+  $("#run").onclick=()=>{STATE.offset=0;STATE.items=[];search();};
+  $("#reset").onclick=()=>location.reload();
+  $("#loadmore").onclick=()=>{STATE.offset+=PAGE;search(true);};
+  $("#jump").addEventListener("keydown",e=>{if(e.key==="Enter")jumpTo();});
+  ["btype","status","party","kw"].forEach(id=>$("#"+id).addEventListener("keydown",e=>{if(e.key==="Enter")$("#run").click();}));
+  $("#sponsor").addEventListener("focus",loadMembers,{once:true});
+  document.querySelectorAll(".vtab").forEach(t=>t.onclick=()=>{
+    document.querySelectorAll(".vtab").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+    t.classList.add("active");$('.view[data-v="'+t.dataset.v+'"]').classList.add("active");
+    if(t.dataset.v==="week"&&!$("#weekList").dataset.loaded)loadWeek();
+  });
+  document.querySelectorAll(".dtab").forEach(t=>t.onclick=()=>{
+    document.querySelectorAll(".dtab").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".dpanel").forEach(x=>x.classList.remove("active"));
+    t.classList.add("active");$('.dpanel[data-d="'+t.dataset.d+'"]').classList.add("active");
+  });
+  $("#srcFoot").textContent="119th Congress (2025–2027). Built for toresays.com.";
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")closeBill();});
+  search();
+})();
+
+/* ============================ MEMBERS (for representative filter) ============================ */
+let MEMBERS=null;
+async function loadMembers(){
+  if(MEMBERS)return MEMBERS;
+  try{
+    setStatus("Loading current House members…",true);
+    let out=[],off=0;
+    for(let p=0;p<3;p++){
+      const j=await getJSON(API+"/member?currentMember=true&limit=250&offset="+off);
+      const ms=(j.members||[]).filter(m=>{
+        const tt=(m.terms&&m.terms.item)||[];
+        return tt.some(x=>/House/i.test(x.chamber));
+      });
+      out=out.concat(ms);
+      if(!j.pagination||!j.pagination.next)break;off+=250;
+    }
+    MEMBERS=out.map(m=>({id:m.bioguideId,name:m.name,party:(m.partyName||"").charAt(0)||"?",state:m.state}));
+    const dl=$("#memberList");dl.innerHTML="";
+    MEMBERS.forEach(m=>{const o=document.createElement("option");o.value=m.name;o.label=m.party+" · "+(m.state||"");dl.appendChild(o);});
+    setStatus("");
+  }catch(e){setStatus("");}
+  return MEMBERS;
+}
+function findMember(txt){
+  if(!MEMBERS||!txt)return null;
+  txt=txt.trim().toLowerCase();
+  let m=MEMBERS.find(x=>x.name.toLowerCase()===txt);
+  if(!m)m=MEMBERS.find(x=>x.name.toLowerCase().includes(txt));
+  return m||null;
+}
+
+/* ============================ SEARCH ============================ */
+function setStatus(html,spin){$("#status").innerHTML=(spin?'<span class="spin"></span>':"")+html;}
+function clearResults(){if(STATE.offset===0){$("#results").innerHTML="";$("#countbar").textContent="";}}
+
+async function jumpTo(){
+  const n=$("#jump").value.replace(/[^0-9]/g,"");if(!n)return;
+  const type=$("#btype").value;
+  try{setStatus("Fetching "+typeLabel(type)+" "+n+"…",true);
+    const j=await getJSON(API+"/bill/"+CONGRESS+"/"+type+"/"+n);
+    if(j&&j.bill){setStatus("");openBill({type:type,number:n});}
+    else setStatus('<span class="err">No '+typeLabel(type)+" "+n+" found.</span>");
+  }catch(e){setStatus('<span class="err">'+esc(e.message)+"</span>");}
+}
+
+async function search(append){
+  const type=$("#btype").value, party=$("#party").value, kw=$("#kw").value.trim().toLowerCase();
+  const sponsorTxt=$("#sponsor").value.trim();
+  const stageSel=$("#statusSel");
+  if(!append)clearResults();
+
+  // member mode?
+  let member=null;
+  if(sponsorTxt){await loadMembers();member=findMember(sponsorTxt);}
+
+  try{
+    setStatus("Searching the House record…",true);
+    let raw=[];
+    if(member){
+      STATE.mode="member";
+      const j=await getJSON(API+"/member/"+member.id+"/sponsored-legislation?limit=250");
+      raw=(j.sponsoredLegislation||[]).filter(b=>String(b.type).toLowerCase()===type&&String(b.congress)===String(CONGRESS))
+        .map(b=>({type:b.type,number:b.number,title:b.title,latest:b.latestAction,introduced:b.introducedDate,
+                  sponsorName:member.name,party:member.party,policy:(b.policyArea||{}).name||""}));
+    }else{
+      STATE.mode="list";
+      const j=await getJSON(API+"/bill/"+CONGRESS+"/"+type+"?limit="+PAGE+"&offset="+STATE.offset+"&sort=updateDate+desc");
+      raw=(j.bills||[]).map(b=>({type:b.type,number:b.number,title:b.title,latest:b.latestAction,
+                  introduced:b.introducedDate||"",sponsorName:null,party:null,policy:""}));
+      STATE.total=j.pagination?j.pagination.count:raw.length;
+    }
+    // attach stage
+    raw.forEach(b=>{b.stage=stageOf((b.latest||{}).text);});
+    // client filters that don't need enrichment
+    let items=raw;
+    if(kw)items=items.filter(b=>(b.title||"").toLowerCase().includes(kw));
+    const wantStatus=stageSel?stageSel.value:"";
+    if(wantStatus==="x")items=items.filter(b=>b.stage<0);
+    else if(wantStatus!=="")items=items.filter(b=>b.stage===+wantStatus);
+
+    STATE.items=append?STATE.items.concat(items):items;
+    renderList(STATE.items, party);
+    setStatus("");
+    $("#loadmore").style.display=(STATE.mode==="list"&&!member&&raw.length>=PAGE)?"block":"none";
+
+    // background enrich for party/sponsor/policy in list mode
+    if(STATE.mode==="list")enrich(STATE.items.slice(STATE.offset, STATE.offset+PAGE), party);
+  }catch(e){
+    setStatus('<span class="err">'+esc(e.message)+"</span>");
+  }
+}
+
+async function enrich(items, party){
+  // fetch sponsor/policy for items lacking it, bounded concurrency
+  const todo=items.filter(b=>!b.sponsorName);
+  let i=0;const N=4;
+  async function worker(){
+    while(i<todo.length){
+      const b=todo[i++];
+      try{
+        const d=await billDetail(b.type,b.number);
+        const sp=(d.sponsors&&d.sponsors[0])||{};
+        b.sponsorName=sp.fullName||"";b.party=sp.party||"";b.policy=(d.policyArea||{}).name||"";
+        updateRow(b, party);
+      }catch(e){/*skip*/}
+    }
+  }
+  await Promise.all(Array.from({length:N},worker));
+  // re-apply party filter once enriched
+  if(party)renderList(STATE.items, party);
+}
+
+/* ============================ RENDER LIST ============================ */
+function rowId(b){return b.type+"-"+b.number;}
+function partyTag(p){if(!p)return "";const c=p.charAt(0).toUpperCase();const cls={D:"pD",R:"pR",I:"pI"}[c]||"pI";return '<span class="partytag '+cls+'">'+c+'</span>';}
+function billRow(b){
+  const s=b.stage;
+  return '<div class="bill" data-id="'+rowId(b)+'" onclick="openBill({type:\''+b.type+'\',number:\''+b.number+'\'})">'
+    +'<div class="bnum">'+esc(typeLabel(b.type))+' '+esc(b.number)+'</div>'
+    +'<div class="bmain"><div class="btitle">'+esc(b.title||"(no title yet)")+'</div>'
+    +'<div class="bmeta">'+(b.sponsorName?partyTag(b.party)+' <span>'+esc(b.sponsorName)+'</span>':'<span class="chip">sponsor loading…</span>')
+      +(b.policy?' · <span class="chip">'+esc(b.policy)+'</span>':'')
+      +(b.introduced?' · introduced '+esc(fmtDate(b.introduced)):'')+'</div>'
+    +'<div class="blatest">Latest: '+esc((b.latest||{}).text||"—")+(b.latest&&b.latest.actionDate?' <span class="td">('+esc(fmtDate(b.latest.actionDate))+')</span>':'')+'</div></div>'
+    +'<div class="bside"><span class="pill '+stageClass(s)+'">'+esc(STAGE_LABEL[s]||"Active")+'</span></div></div>';
+}
+function renderList(items, party){
+  let list=items;
+  if(party)list=items.filter(b=>!b.party||b.party.charAt(0).toUpperCase()===party); // keep unknowns until enriched
+  $("#results").innerHTML=list.map(billRow).join("")||'<p class="hint">No bills match. Try widening the filters.</p>';
+  const total=STATE.mode==="list"&&STATE.total?(" of "+STATE.total.toLocaleString()+" "+typeLabel($("#btype").value)+" measures this Congress"):"";
+  $("#countbar").textContent="Showing "+list.length+" bill"+(list.length===1?"":"s")+total+(party?" · party filter applies as sponsors load":"");
+}
+function updateRow(b, party){
+  const el=document.querySelector('.bill[data-id="'+rowId(b)+'"]');
+  if(el)el.outerHTML=billRow(b);
+}
+
+/* ============================ DETAIL ============================ */
+async function billDetail(type,number){
+  const k=type+"-"+number;
+  if(detailCache.has(k))return detailCache.get(k);
+  const j=await getJSON(API+"/bill/"+CONGRESS+"/"+type+"/"+number);
+  const d=j.bill||{};detailCache.set(k,d);return d;
+}
+let CURRENT=null;
+function openBill(ref){
+  CURRENT={type:ref.type,number:ref.number,text:null,plain:null};
+  $("#overlay").classList.add("open");$("#drawer").classList.add("open");
+  document.querySelector('.dtab[data-d="ov"]').click();
+  $("#dNum").textContent=typeLabel(ref.type)+" "+ref.number+" · "+CONGRESS+"th Congress";
+  $("#dTitle").textContent="Loading…";$("#dSub").textContent="";
+  ["pOv","pTl","pAn","pMore"].forEach(id=>$("#"+id).innerHTML="");
+  loadDetail();
+}
+function closeBill(){$("#overlay").classList.remove("open");$("#drawer").classList.remove("open");}
+
+async function loadDetail(){
+  const {type,number}=CURRENT;
+  try{
+    const d=await billDetail(type,number);
+    const sp=(d.sponsors&&d.sponsors[0])||{};
+    $("#dTitle").textContent=d.title||"(untitled)";
+    $("#dSub").innerHTML=(sp.fullName?partyTag(sp.party)+" "+esc(sp.fullName)+" · ":"")
+      +'<a href="'+esc(d.legislationUrl||("https://www.congress.gov/bill/"+CONGRESS+"th-congress/house-bill/"+number))+'" target="_blank" rel="noopener">View on congress.gov ↗</a>';
+    renderOverview(d);
+    renderTimeline(type,number,d);
+    renderMore(d);
+    prepAnalyzer(d);
+  }catch(e){$("#dTitle").textContent="Could not load bill";$("#pOv").innerHTML='<p class="err">'+esc(e.message)+"</p>";}
+}
+
+function renderOverview(d){
+  const sp=(d.sponsors&&d.sponsors[0])||{};
+  const la=d.latestAction||{};const stage=stageOf(la.text);
+  let h='<div class="kv">';
+  h+='<div class="card"><div class="k">Status</div><div class="v"><span class="pill '+stageClass(stage)+'">'+esc(STAGE_LABEL[stage]||"Active")+'</span></div></div>';
+  h+='<div class="card"><div class="k">Sponsor</div><div class="v">'+(sp.fullName?partyTag(sp.party)+" "+esc(sp.fullName):"—")+'</div></div>';
+  h+='<div class="card"><div class="k">Introduced</div><div class="v">'+esc(fmtDate(d.introducedDate))+'</div></div>';
+  h+='<div class="card"><div class="k">Policy area</div><div class="v">'+esc((d.policyArea||{}).name||"—")+'</div></div>';
+  h+='<div class="card"><div class="k">Cosponsors</div><div class="v" id="cosTotal">…</div></div>';
+  h+='<div class="card"><div class="k">Committees</div><div class="v">'+(d.committees?d.committees.count:"—")+'</div></div>';
+  h+='</div>';
+  h+='<div class="sect-title">Latest action</div><p>'+esc(la.text||"—")+' <span class="td">('+esc(fmtDate(la.actionDate))+')</span></p>';
+  if(d.laws&&d.laws.length)h+='<p><b>Enacted:</b> '+esc(d.laws[0].type)+" "+esc(d.laws[0].number)+"</p>";
+  h+='<div id="ovSummary"><div class="sect-title">Official summary</div><p class="hint"><span class="spin"></span>loading…</p></div>';
+  $("#pOv").innerHTML=h;
+  loadCosponsors(d);
+  loadSummary(d);
+}
+async function loadCosponsors(d){
+  try{
+    if(!d.cosponsors){$("#cosTotal").textContent="0";return;}
+    const j=await getJSON(API+"/bill/"+CONGRESS+"/"+CURRENT.type+"/"+CURRENT.number+"/cosponsors?limit=250");
+    const cs=j.cosponsors||[];const t={D:0,R:0,I:0};
+    cs.forEach(c=>{const p=(c.party||"").charAt(0).toUpperCase();t[p==="D"?"D":p==="R"?"R":"I"]++;});
+    $("#cosTotal").innerHTML=cs.length+' <span class="hint" style="font-size:12px">('
+      +'<span class="partytag pD">'+t.D+'D</span> <span class="partytag pR">'+t.R+'R</span>'+(t.I?' <span class="partytag pI">'+t.I+'I</span>':'')+')</span>';
+  }catch(e){$("#cosTotal").textContent=d.cosponsors?d.cosponsors.count:"—";}
+}
+async function loadSummary(d){
+  try{
+    if(!d.summaries){$("#ovSummary").innerHTML='<div class="sect-title">Official summary</div><p class="hint">No summary published yet.</p>';return;}
+    const j=await getJSON(API+"/bill/"+CONGRESS+"/"+CURRENT.type+"/"+CURRENT.number+"/summaries");
+    const arr=j.summaries||[];const last=arr[arr.length-1];
+    if(!last){$("#ovSummary").innerHTML='<div class="sect-title">Official summary</div><p class="hint">No summary published yet.</p>';return;}
+    $("#ovSummary").innerHTML='<div class="sect-title">Official summary · '+esc(last.actionDesc||"")+'</div><div>'+(last.text||"")+'</div>';
+  }catch(e){$("#ovSummary").innerHTML="";}
+}
+
+async function renderTimeline(type,number,d){
+  $("#pTl").innerHTML='<p class="hint"><span class="spin"></span>Loading full action history…</p>';
+  try{
+    const j=await getJSON(API+"/bill/"+CONGRESS+"/"+type+"/"+number+"/actions?limit=250");
+    const acts=(j.actions||[]).slice().sort((a,b)=>(a.actionDate>b.actionDate?-1:a.actionDate<b.actionDate?1:0));
+    let h='<div class="sect-title">'+acts.length+' actions · newest first</div><ul class="tl">';
+    acts.forEach(a=>{
+      const big=/passed|became|reported|presented|signed|veto|agreed to/i.test(a.text||"");
+      h+='<li'+(big?' class="big"':'')+'><div class="td">'+esc(fmtDate(a.actionDate))+(a.type?' · '+esc(a.type):'')+'</div><div class="tt">'+esc(a.text||"")+'</div></li>';
+    });
+    h+='</ul>';$("#pTl").innerHTML=h;
+  }catch(e){$("#pTl").innerHTML='<p class="err">'+esc(e.message)+"</p>";}
+}
+
+function renderMore(d){
+  let h="";
+  h+='<div class="sect-title">Legislative subjects</div><div id="subjWrap"><p class="hint"><span class="spin"></span>loading…</p></div>';
+  if(d.cboCostEstimates&&d.cboCostEstimates.length){
+    h+='<div class="sect-title">CBO cost estimates</div>';
+    d.cboCostEstimates.forEach(c=>{h+='<p>• <a href="'+esc(c.url)+'" target="_blank" rel="noopener">'+esc(c.title)+'</a> <span class="td">'+esc(fmtDate(c.pubDate))+'</span></p>';});
+  }
+  if(d.committeeReports&&d.committeeReports.length){
+    h+='<div class="sect-title">Committee reports</div>';
+    d.committeeReports.forEach(c=>{h+='<p>• '+esc(c.citation)+'</p>';});
+  }
+  if(d.relatedBills){h+='<div class="sect-title">Related measures</div><p class="hint">'+d.relatedBills.count+' related bill(s). <a href="'+esc(d.legislationUrl)+'/related-bills" target="_blank" rel="noopener">View on congress.gov ↗</a></p>';}
+  $("#pMore").innerHTML=h;
+  loadSubjects(d);
+}
+async function loadSubjects(d){
+  try{
+    if(!d.subjects){$("#subjWrap").innerHTML='<p class="hint">None listed.</p>';return;}
+    const j=await getJSON(API+"/bill/"+CONGRESS+"/"+CURRENT.type+"/"+CURRENT.number+"/subjects?limit=250");
+    const subs=((j.subjects||{}).legislativeSubjects)||[];
+    $("#subjWrap").innerHTML=subs.length?subs.map(s=>'<span class="chip" style="display:inline-block;margin:0 4px 6px 0">'+esc(s.name)+'</span>').join(""):'<p class="hint">None listed.</p>';
+  }catch(e){$("#subjWrap").innerHTML="";}
+}
+
+/* ============================ ANALYZER ============================ */
+const RULES=[
+ {id:"notw",sev:"high",label:'Overrides other laws — "notwithstanding any other provision of law"',re:/notwithstanding any other provision of (law|this title|this Act)/gi,
+   why:"Lets this provision bypass other existing laws that might limit it. One of the most powerful — and quietly abused — phrases in legislation."},
+ {id:"nojud",sev:"high",label:"Blocks court review",re:/shall not be subject to judicial review|precludes? judicial review|not be reviewable in any court|no court shall have jurisdiction|not subject to review/gi,
+   why:"Removes the courts' ability to check this action. Affected people may have no way to challenge it in court."},
+ {id:"apa",sev:"high",label:"Skips normal rulemaking / review (APA, notice-and-comment, NEPA)",re:/without regard to (the provisions of )?(chapter 5 of title 5|subchapter II of chapter 5|the Administrative Procedure Act|section 553|the National Environmental Policy Act)/gi,
+   why:"Lets an agency act without the normal public notice-and-comment, environmental review, or other safeguards that usually apply."},
+ {id:"sums",sev:"med",label:'Uncapped funding — "such sums as may be necessary"',re:/such sums as (may be|are) necessary/gi,
+   why:"Authorizes spending with no dollar cap. The real cost is left open-ended and decided later."},
+ {id:"disc",sev:"med",label:"Broad / sole discretion handed to an official",re:/(in|at) the sole discretion of|sole and (unreviewable|absolute) discretion|as the (Secretary|Administrator|Director|President|Attorney General|Commissioner)[^.]{0,45}(determines|considers|deems)[^.]{0,30}(appropriate|necessary)/gi,
+   why:"Gives one official broad, largely unchecked power to decide how this works, with little in the statute to constrain them."},
+ {id:"emerg",sev:"med",label:'Designated an "emergency" to dodge spending limits',re:/designated as (an emergency|emergency requirement)|emergency requirement pursuant to/gi,
+   why:'Labeling spending an "emergency" exempts it from budget caps and pay-as-you-go rules — a common way to add cost without offsets.'},
+ {id:"waive",sev:"med",label:"Waives existing requirements",re:/may waive|is authorized to waive|waiver of (any|the|all) (requirement|provision|rule)/gi,
+   why:"Allows existing legal requirements to be set aside. Check what is waived and who decides."},
+ {id:"retro",sev:"med",label:"Takes effect retroactively",re:/effective as if (enacted|included)|shall (take effect|apply) (as if|retroactively)/gi,
+   why:"Applies to the past, not just the future — which can change the legal consequences of things already done."},
+ {id:"xfer",sev:"med",label:"Lets funds be moved / reprogrammed between accounts",re:/may (transfer|reprogram)|authority to transfer|transferred (to|between) (any )?(other )?accounts?/gi,
+   why:"Money appropriated for one purpose can be shifted to another, reducing transparency over where dollars end up."},
+ {id:"repeal",sev:"med",label:"Repeals existing law",re:/is (hereby )?repealed|are (hereby )?repealed|repeal of section/gi,
+   why:"Strikes existing law off the books. Check exactly what protection or program is removed."},
+ {id:"auth",sev:"low",label:"Authorizes spending but may not actually fund it",re:/there (is|are) authorized to be appropriated/gi,
+   why:"This only authorizes future spending — it does not provide the money. Real funding needs a separate appropriations bill."},
+ {id:"other",sev:"low",label:'Vague catch-all — "and for other purposes"',re:/and for other purposes/gi,
+   why:"Open-ended catch-all language that can justify provisions beyond the bill's stated aim."},
+ {id:"amend",sev:"info",label:"Amends existing law by reference (hidden impact)",re:/is amended[—-]|by striking|by inserting|by adding at the end/gi,
+   why:'The bill edits existing U.S. Code by quoting fragments ("strike X, insert Y"). The real effect is invisible unless read against current law.'},
+ {id:"rule",sev:"info",label:"Delegates the details to agency regulations",re:/shall (issue|prescribe|promulgate) (regulations|rules)|by regulation/gi,
+   why:"The specifics are left to an agency to write later — the real rules won't be known until regulations issue."},
+ {id:"sunset",sev:"info",label:"Sunset / expiration clause",re:/shall (cease to have effect|expire|terminate) (on|after|at)|sunset|termination date/gi,
+   why:"The provision automatically ends on a set date unless renewed. Note whether something important expires."},
+ {id:"sense",sev:"info",label:'"Sense of Congress" — non-binding',re:/it is the sense of (the )?(congress|house|senate)/gi,
+   why:'A "sense of Congress" statement expresses an opinion but has no binding legal force.'}
+];
+const VAGUE=/\b(reasonable|appropriate|practicable|substantial(ly)?|significant(ly)?|as necessary|from time to time|undue|good faith|to the extent (feasible|practicable)|adequate|excessive)\b/gi;
+
+function prepAnalyzer(d){
+  const p=$("#pAn");
+  if(!d.textVersions){p.innerHTML='<p class="hint">No bill text has been published yet (often the case for brand-new introductions). Check back after it is formally printed.</p>';return;}
+  p.innerHTML='<p class="hint"><span class="spin"></span>Finding bill text versions…</p>';
+  getJSON(API+"/bill/"+CONGRESS+"/"+CURRENT.type+"/"+CURRENT.number+"/text").then(j=>{
+    const vers=(j.textVersions||[]);
+    if(!vers.length){p.innerHTML='<p class="hint">No readable text version is available yet.</p>';return;}
+    let opts="";
+    vers.forEach((v,i)=>{
+      const fmt=(v.formats||[]).find(f=>/Formatted Text/i.test(f.type))||(v.formats||[]).find(f=>/XML/i.test(f.type));
+      if(fmt)opts+='<option value="'+esc(fmt.url)+'">'+esc(v.type||("Version "+(i+1)))+' · '+esc(fmtDate(v.date))+'</option>';
+    });
+    p.innerHTML='<div class="toolbar"><div class="field" style="min-width:280px"><label>Text version to analyze</label><select id="verSel">'+opts+'</select></div>'
+      +'<button class="primary" onclick="runAnalyzer()" style="align-self:flex-end">Analyze this text</button></div>'
+      +'<div id="anOut"><p class="hint">Pick a version and click <b>Analyze</b>. The detector reads the actual bill text in your browser and highlights language worth a closer look.</p></div>';
+  }).catch(e=>{p.innerHTML='<p class="err">'+esc(e.message)+"</p>";});
+}
+
+async function fetchText(url){
+  if(textCache.has(url))return textCache.get(url);
+  const r=await fetch(url);if(!r.ok)throw new Error("Couldn't load bill text (HTTP "+r.status+").");
+  let html=await r.text();
+  // strip scripts/styles then tags
+  html=html.replace(/<(script|style)[\s\S]*?<\/\1>/gi," ");
+  let txt=html.replace(/<\/(p|div|li|h\d|tr|section)>/gi,"\n").replace(/<[^>]+>/g," ");
+  const ta=document.createElement("textarea");ta.innerHTML=txt;txt=ta.value;
+  txt=txt.replace(/ /g," ").replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
+  textCache.set(url,txt);return txt;
+}
+
+function scan(text){
+  const flags=[];const ranges=[];
+  RULES.forEach(rule=>{
+    const re=new RegExp(rule.re.source,rule.re.flags);let m,examples=[],count=0;
+    while((m=re.exec(text))){
+      count++;
+      ranges.push([m.index,m.index+m[0].length,rule.sev]);
+      if(examples.length<3){
+        const s=Math.max(0,m.index-60),e=Math.min(text.length,m.index+m[0].length+90);
+        let pre=esc(text.slice(s,m.index)),hit=esc(m[0]),post=esc(text.slice(m.index+m[0].length,e));
+        examples.push((s>0?"…":"")+pre+"<mark>"+hit+"</mark>"+post+(e<text.length?"…":""));
+      }
+      if(m.index===re.lastIndex)re.lastIndex++;
+      if(count>5000)break;
+    }
+    if(count)flags.push({rule,count,examples});
+  });
+  // vague terms density
+  let vm,vcount=0;const vre=new RegExp(VAGUE.source,VAGUE.flags);while((vm=vre.exec(text))){vcount++;if(vm.index===vre.lastIndex)vre.lastIndex++;if(vcount>20000)break;}
+  return {flags,ranges,vcount,len:text.length};
+}
+
+function riskScore(res){
+  const w={high:14,med:6,low:2,info:.4};let s=0;
+  res.flags.forEach(f=>{s+=w[f.rule.sev]*Math.min(f.count, f.rule.sev==="info"?6:8);});
+  s+=Math.min(res.vcount/Math.max(1,res.len/1000),12); // vague density
+  return Math.min(100,Math.round(s));
+}
+function scoreLabel(n){return n>=70?["High","var(--sole)"]:n>=40?["Elevated","var(--gold)"]:n>=15?["Moderate","var(--obl)"]:["Low","var(--obl)"];}
+
+function highlightText(text,ranges){
+  if(!ranges.length)return esc(text.slice(0,200000));
+  ranges=ranges.slice().sort((a,b)=>a[0]-b[0]);
+  // merge overlaps keeping highest priority severity
+  const pri={high:4,med:3,low:2,info:1};const merged=[];
+  ranges.forEach(r=>{const last=merged[merged.length-1];if(last&&r[0]<=last[1]){last[1]=Math.max(last[1],r[1]);if(pri[r[2]]>pri[last[2]])last[2]=r[2];}else merged.push(r.slice());});
+  let out="",pos=0;const cls={high:"h",med:"m",low:"l",info:"i"};const CAP=200000;
+  for(const r of merged){if(r[0]>CAP)break;out+=esc(text.slice(pos,r[0]))+'<mark class="'+cls[r[2]]+'">'+esc(text.slice(r[0],Math.min(r[1],CAP)))+"</mark>";pos=Math.min(r[1],CAP);}
+  out+=esc(text.slice(pos,CAP));if(text.length>CAP)out+="\n\n… (text truncated for display) …";
+  return out;
+}
+
+let LASTSCAN=null;
+async function runAnalyzer(){
+  const url=$("#verSel").value;const out=$("#anOut");
+  out.innerHTML='<p class="hint"><span class="spin"></span>Reading the full bill text and scanning…</p>';
+  try{
+    const text=await fetchText(url);CURRENT.plain=text;CURRENT.textUrl=url;
+    const res=scan(text);LASTSCAN=res;
+    const score=riskScore(res);const[lbl,col]=scoreLabel(score);
+    const order={high:0,med:1,low:2,info:3};
+    res.flags.sort((a,b)=>order[a.rule.sev]-order[b.rule.sev]||b.count-a.count);
+    const nHigh=res.flags.filter(f=>f.rule.sev==="high").reduce((s,f)=>s+f.count,0);
+    const nMed=res.flags.filter(f=>f.rule.sev==="med").reduce((s,f)=>s+f.count,0);
+    let h='<div class="scorebox"><div class="scoredial" style="color:'+col+'">'+score+'</div>'
+      +'<div><div style="font-weight:700">Scrutiny score: '+lbl+'</div>'
+      +'<div class="hint">'+nHigh+' high-concern · '+nMed+' medium · '+res.vcount+' vague terms across ~'+Math.round(res.len/1000)+'k characters. '
+      +'A reading aid, not a verdict.</div></div></div>';
+    if(AI_WORKER_URL)h+='<div class="toolbar"><button class="primary" onclick="runAI()">✦ Run Claude AI deep-dive</button><span class="hint">Plain-English summary + who benefits / who\'s burdened.</span></div><div id="aiBox"></div>';
+    else h+='<div class="setupbox" id="aiBox"><b>✦ AI deep-dive (not yet configured).</b> The rules detector above runs with no setup. To add a plain-English Claude analysis, deploy the included <code>ai-worker.js</code> Cloudflare Worker and set <code>AI_WORKER_URL</code> at the top of this file.</div>';
+    h+='<div class="sect-title">Flagged language ('+res.flags.length+' kinds)</div>';
+    if(!res.flags.length)h+='<p class="hint">No watch-phrases detected. The bill may be short, procedural, or unusually plain.</p>';
+    res.flags.forEach(f=>{
+      h+='<div class="flag '+f.rule.sev+'"><div class="ft"><span class="sev '+f.rule.sev+'">'+f.rule.sev+'</span>'+esc(f.rule.label)+' <span class="cnt">×'+f.count+'</span></div>'
+        +'<div class="fd">'+esc(f.rule.why)+'</div>'
+        +f.examples.map(e=>'<div class="ex">'+e+'</div>').join("")+'</div>';
+    });
+    h+='<div class="sect-title">Full text — flags highlighted</div>'
+      +'<p class="hint"><a href="'+esc(url)+'" target="_blank" rel="noopener">Open the official text on congress.gov ↗</a></p>'
+      +'<div class="textbox">'+highlightText(text,res.ranges)+'</div>';
+    out.innerHTML=h;
+  }catch(e){out.innerHTML='<p class="err">'+esc(e.message)+' <span class="hint">Some older bills host text on a server that blocks direct reading; use the congress.gov link instead.</span></p>';}
+}
+
+async function runAI(){
+  const box=$("#aiBox");box.innerHTML='<p class="hint"><span class="spin"></span>Asking Claude to read the flagged passages…</p>';
+  try{
+    const d=detailCache.get(CURRENT.type+"-"+CURRENT.number)||{};
+    const flagged=(LASTSCAN?LASTSCAN.flags:[]).flatMap(f=>f.examples.map(e=>e.replace(/<\/?mark>/g,"").replace(/&[a-z]+;/g," "))).slice(0,40);
+    const payload={
+      title:d.title||"",
+      bill:typeLabel(CURRENT.type)+" "+CURRENT.number,
+      policyArea:(d.policyArea||{}).name||"",
+      flagged:flagged,
+      textSample:(CURRENT.plain||"").slice(0,18000)
+    };
+    const r=await fetch(AI_WORKER_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if(!r.ok)throw new Error("AI service error (HTTP "+r.status+").");
+    const j=await r.json();
+    const a=j.analysis||j;
+    let h='<div class="ai-out">';
+    if(a.plainSummary){h+='<h4>In plain English</h4><p>'+esc(a.plainSummary)+'</p>';}
+    if(a.traps&&a.traps.length){h+='<h4>Traps &amp; fine print</h4>';a.traps.forEach(t=>{h+='<div class="flag '+(/(high|critical)/i.test(t.severity||"")?"high":/med/i.test(t.severity||"")?"med":"low")+'"><div class="ft">'+esc(t.title||t.quote||"")+'</div>'+(t.quote?'<div class="ex">'+esc(t.quote)+'</div>':'')+'<div class="fd">'+esc(t.why||"")+'</div></div>';});}
+    if(a.whoBenefits){h+='<h4>Who benefits</h4><p>'+esc(a.whoBenefits)+'</p>';}
+    if(a.whoBurdened){h+='<h4>Who pays / is burdened</h4><p>'+esc(a.whoBurdened)+'</p>';}
+    if(a.changesToLaw){h+='<h4>What existing law it changes</h4><p>'+esc(a.changesToLaw)+'</p>';}
+    if(a.watchList&&a.watchList.length){h+='<h4>Watch for</h4><ul>'+a.watchList.map(w=>'<li>'+esc(w)+'</li>').join("")+'</ul>';}
+    h+='<p class="hint" style="margin-top:12px">AI-generated and may be wrong — verify against the bill text above.</p></div>';
+    box.innerHTML=h;
+  }catch(e){box.innerHTML='<p class="err">'+esc(e.message)+'</p>';}
+}
+
+/* ============================ HOUSE THIS WEEK ============================ */
+async function loadWeek(){
+  const wl=$("#weekList");wl.dataset.loaded="1";
+  wl.innerHTML='<p class="hint"><span class="spin"></span>Pulling the latest House activity…</p>';
+  try{
+    const j=await getJSON(API+"/bill/"+CONGRESS+"/hr?limit=80&sort=updateDate+desc");
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-16);
+    const items=(j.bills||[]).map(b=>({type:b.type,number:b.number,title:b.title,latest:b.latestAction,introduced:b.introducedDate||"",stage:stageOf((b.latestAction||{}).text)}))
+      .filter(b=>{const la=b.latest||{};return la.actionDate&&new Date(la.actionDate)>=cutoff;})
+      .filter(b=>b.stage>=2||/passed|reported|rules committee|calendar|presented|became/i.test((b.latest||{}).text||""));
+    wl.innerHTML=items.length?items.map(billRow).join(""):'<p class="hint">No major floor movement in the last two weeks.</p>';
+  }catch(e){wl.innerHTML='<p class="err">'+esc(e.message)+"</p>";}
+}
+
+/* height postMessage for iframe embed (matches Tore embed pattern) */
+(function(){var last=0;function H(){try{if(parent&&parent!==window){var h=document.body.scrollHeight;if(Math.abs(h-last)>2){last=h;parent.postMessage({__ftmusaHeight:h},"*");}}}catch(e){}}
+if(window.ResizeObserver){try{new ResizeObserver(H).observe(document.body);}catch(e){}}window.addEventListener("load",H);window.addEventListener("resize",H);setInterval(H,800);})();
+</script>
+</body>
+</html>
