@@ -713,36 +713,59 @@ async function runAnalyzer(){
   }catch(e){out.innerHTML='<p class="err">'+esc(e.message)+' <span class="hint">Some older bills host text on a server that blocks direct reading; use the congress.gov link instead.</span></p>';}
 }
 
+function byokKey(){return (localStorage.getItem("tore_byok_key")||"").trim();}
+function setBYOK(){
+  const v=prompt("Paste your own Anthropic API key (sk-ant-…) to run deep-dives on your own account at no cost to this site. Stored only in this browser; sent securely per request.",byokKey());
+  if(v===null)return;
+  if(v.trim())localStorage.setItem("tore_byok_key",v.trim());else localStorage.removeItem("tore_byok_key");
+  renderAIStatus(); if(byokKey()&&$("#aiBox"))runAI();
+}
+function clearBYOK(){localStorage.removeItem("tore_byok_key");renderAIStatus();const b=$("#aiBox");if(b)b.innerHTML="";}
 async function aiConfigLoad(){
   if(!AI_WORKER_URL)return;
   try{const r=await fetch(AI_WORKER_URL+"/balance?token="+encodeURIComponent(AI_TOKEN));const j=await r.json();if(j&&typeof j==="object")AI_CFG=j;}catch(e){}
 }
-function setCreditsLabel(n){
-  const el=$("#aiCredits");if(!el||!AI_CFG.paywall)return;
-  el.innerHTML=(n>0?'<b>'+n+'</b> AI credit'+(n===1?'':'s')+' left':'Out of AI credits — buy a pack to continue');
+function aiHasAccess(){
+  if(byokKey())return true;
+  if(!AI_CFG.paywall)return true;
+  if(AI_CFG.sub&&AI_CFG.sub.active&&AI_CFG.sub.used<AI_CFG.sub.cap)return true;
+  return (AI_CFG.credits||0)>0;
 }
-async function refreshCredits(){
-  await aiConfigLoad();
-  if(!AI_CFG.paywall)return;            // paywall off → leave the default hint, AI is free
-  setCreditsLabel(AI_CFG.credits);
+function renderAIStatus(){
+  const el=$("#aiCredits");
+  if(el){
+    if(byokKey())el.innerHTML='Using your own Anthropic key · <a href="#" onclick="clearBYOK();return false">remove</a>';
+    else if(!AI_CFG.paywall)el.innerHTML='Plain-English summary + who benefits / who’s burdened. · <a href="#" onclick="setBYOK();return false">use your own key</a>';
+    else if(AI_CFG.sub&&AI_CFG.sub.active)el.innerHTML='Subscriber · <b>'+Math.max(0,AI_CFG.sub.cap-AI_CFG.sub.used)+'</b> of '+AI_CFG.sub.cap+' left this month';
+    else if((AI_CFG.credits||0)>0)el.innerHTML='<b>'+AI_CFG.credits+'</b> AI credit'+(AI_CFG.credits===1?'':'s')+' left · <a href="#" onclick="showAccessPanel();return false">get more</a>';
+    else el.innerHTML='<a href="#" onclick="showAccessPanel();return false">Unlock AI deep-dives →</a>';
+  }
   const btn=$("#aiRunBtn");
-  if((AI_CFG.credits||0)<=0&&btn)btn.outerHTML='<button class="primary" id="aiRunBtn" onclick="buyCredits()">✦ Buy AI credits — '+(AI_CFG.packCredits||100)+' deep-dives</button>';
+  if(btn){
+    if(aiHasAccess()){btn.textContent="✦ Run Claude AI deep-dive";btn.setAttribute("onclick","runAI()");}
+    else{btn.textContent="✦ Unlock AI deep-dive";btn.setAttribute("onclick","showAccessPanel()");}
+  }
 }
-function buyPrompt(buyUrl,pack){
-  if(buyUrl)AI_CFG.buyUrl=buyUrl; if(pack)AI_CFG.packCredits=pack;
-  return '<div class="setupbox"><b>Out of AI credits.</b> Unlock '+(AI_CFG.packCredits||100)+' Claude deep-dives.'
-    +'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'
-    +'<button class="primary" onclick="buyCredits()">✦ Buy AI credits</button>'
-    +'<button class="ghost" onclick="(async()=>{await refreshCredits();runAI();})()">I’ve paid — continue</button></div></div>';
+async function refreshCredits(){await aiConfigLoad();renderAIStatus();}
+function showAccessPanel(){
+  const box=$("#aiBox");if(!box)return;
+  let h='<div class="setupbox"><b>Unlock AI deep-dives</b><div class="hint" style="margin:4px 0 12px">Pick how to run Claude analysis on this bill:</div><div style="display:flex;gap:8px;flex-wrap:wrap">';
+  if(AI_CFG.buyUrl)h+='<button class="primary" onclick="buyCredits(\'pack\')">✦ Buy '+(AI_CFG.packCredits||100)+' credits</button>';
+  if(AI_CFG.subUrl)h+='<button class="primary" onclick="buyCredits(\'sub\')">★ Subscribe — '+(AI_CFG.subCap||0)+'/mo</button>';
+  if(AI_CFG.byok)h+='<button class="ghost" onclick="setBYOK()">Use your own Anthropic key</button>';
+  h+='</div>';
+  if(AI_CFG.buyUrl||AI_CFG.subUrl)h+='<div style="margin-top:10px"><button class="ghost" onclick="(async()=>{await refreshCredits();if(aiHasAccess())runAI();})()">I’ve paid — continue</button></div>';
+  box.innerHTML=h+'</div>';
 }
-function buyCredits(){
-  if(!AI_CFG.buyUrl){alert("Purchasing isn’t set up yet — check back soon.");return;}
-  const u=AI_CFG.buyUrl+(AI_CFG.buyUrl.indexOf("?")>=0?"&":"?")+"client_reference_id="+encodeURIComponent(AI_TOKEN);
+function buyCredits(kind){
+  const u0=(kind==="sub")?AI_CFG.subUrl:AI_CFG.buyUrl;
+  if(!u0){alert("That option isn’t set up yet — check back soon.");return;}
+  const u=u0+(u0.indexOf("?")>=0?"&":"?")+"client_reference_id="+encodeURIComponent(AI_TOKEN);
   window.open(u,"_blank","noopener");
   const box=$("#aiBox");if(box)box.innerHTML='<p class="hint"><span class="spin"></span>Waiting for your payment to confirm… this updates automatically once Stripe completes.</p>';
   let tries=0;clearInterval(window._aiPoll);
-  window._aiPoll=setInterval(async()=>{tries++;const before=AI_CFG.credits||0;await aiConfigLoad();
-    if((AI_CFG.credits||0)>before){clearInterval(window._aiPoll);setCreditsLabel(AI_CFG.credits);if(box)box.innerHTML='<p class="hint">✓ '+AI_CFG.credits+' credits added. Running your analysis…</p>';runAI();}
+  window._aiPoll=setInterval(async()=>{tries++;const had=aiHasAccess();await aiConfigLoad();
+    if(aiHasAccess()&&!had){clearInterval(window._aiPoll);renderAIStatus();if(box)box.innerHTML='<p class="hint">✓ Access unlocked. Running your analysis…</p>';runAI();}
     if(tries>40)clearInterval(window._aiPoll);
   },3000);
 }
@@ -753,6 +776,7 @@ async function runAI(){
     const flagged=(LASTSCAN?LASTSCAN.flags:[]).flatMap(f=>f.examples.map(e=>e.replace(/<\/?mark>/g,"").replace(/&[a-z]+;/g," "))).slice(0,40);
     const payload={
       token:AI_TOKEN,
+      byokKey:byokKey()||undefined,
       title:d.title||"",
       bill:typeLabel(CURRENT.type)+" "+CURRENT.number,
       policyArea:(d.policyArea||{}).name||"",
@@ -761,13 +785,14 @@ async function runAI(){
     };
     const r=await fetch(AI_WORKER_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     const j=await r.json().catch(()=>({}));
-    if(r.status===402||j.error==="no_credits"){box.innerHTML=buyPrompt(j.buyUrl,j.packCredits);return;}
+    if(r.status===402||j.error==="no_credits"){AI_CFG=Object.assign({},AI_CFG,j);showAccessPanel();return;}
     if(!r.ok||j.error){
       let msg=j.error||("AI service error (HTTP "+r.status+")");
       try{var dd=JSON.parse(j.detail);if(dd&&dd.error&&dd.error.message)msg=dd.error.message;}catch(e){}
       throw new Error(msg);
     }
-    if(typeof j.creditsLeft==="number")setCreditsLabel(j.creditsLeft);
+    if(typeof j.creditsLeft==="number")AI_CFG.credits=j.creditsLeft;
+    renderAIStatus();
     const a=j.analysis||j;
     let h='<div class="ai-out">';
     if(a.plainSummary){h+='<h4>In plain English</h4><p>'+esc(a.plainSummary)+'</p>';}
