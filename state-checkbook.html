@@ -164,11 +164,13 @@
 /* Each state = one config. fy = a fiscal-year text column; fyExpr = a SoQL expression (numeric) when there is no fy column.
    vendor/amount/agency/category are column names; optional date/desc/city. portal = human link. */
 const STATES={
-  MD:{name:"Maryland", domain:"opendata.maryland.gov", id:"7syw-q4cy", vendor:"vendor_name", amount:"amount", fy:"fiscal_year", agency:"agency_name", category:"category", date:"date", portal:"https://opendata.maryland.gov/d/7syw-q4cy"},
-  MA:{name:"Massachusetts", domain:"cthru.data.socrata.com", id:"pegc-naaa", vendor:"vendor", amount:"amount", fy:"budget_fiscal_year", agency:"department", category:"object_class", date:"date", city:"city", portal:"https://cthruspending.mass.gov/"},
-  NJ:{name:"New Jersey", domain:"data.nj.gov", id:"apet-rp2i", vendor:"payee_name", amount:"expended_amt", fy:"budget_fiscal_year", agency:"ibno_agency", category:"expenditure_category", desc:"expenditure_desc", portal:"https://www.yourmoney.nj.gov/"},
-  OR:{name:"Oregon", domain:"data.oregon.gov", id:"y9g9-xsxs", vendor:"vendor", amount:"expense", fy:"fiscal_year", agency:"agency_1", category:"expend_class_1", portal:"https://www.oregon.gov/transparency/Pages/Checkbook.aspx"},
-  VT:{name:"Vermont", domain:"data.vermont.gov", id:"p5kg-p2h8", vendor:"vendor", amount:"amt", fyExpr:"date_extract_y(qtrending)", agency:"govtunit", category:"account", desc:"description", date:"qtrending", portal:"https://spotlight.vermont.gov/"}
+  MD:{group:"Maryland", name:"State of Maryland", domain:"opendata.maryland.gov", id:"7syw-q4cy", vendor:"vendor_name", amount:"amount", fy:"fiscal_year", agency:"agency_name", category:"category", date:"date", portal:"https://opendata.maryland.gov/d/7syw-q4cy"},
+  MDMONT:{group:"Maryland", name:"— Montgomery County", domain:"data.montgomerycountymd.gov", id:"vpf9-6irq", vendor:"vendor", amount:"amount", fy:"fiscal_year", agency:"department", category:"expense_category", date:"payment_date", portal:"https://data.montgomerycountymd.gov/d/vpf9-6irq"},
+  MDHOW:{group:"Maryland", name:"— Howard County", domain:"opendata.howardcountymd.gov", id:"mesh-jggc", vendor:"vendor_name", amount:"amount", fy:"fiscal_year", portal:"https://opendata.howardcountymd.gov/d/mesh-jggc", note:"Howard publishes vendor totals by fiscal year only (no agency/category/transaction detail)."},
+  MA:{group:"Massachusetts", name:"State of Massachusetts", domain:"cthru.data.socrata.com", id:"pegc-naaa", vendor:"vendor", amount:"amount", fy:"budget_fiscal_year", agency:"department", category:"object_class", date:"date", city:"city", portal:"https://cthruspending.mass.gov/"},
+  NJ:{group:"New Jersey", name:"State of New Jersey", domain:"data.nj.gov", id:"apet-rp2i", vendor:"payee_name", amount:"expended_amt", fy:"budget_fiscal_year", agency:"ibno_agency", category:"expenditure_category", desc:"expenditure_desc", portal:"https://www.yourmoney.nj.gov/"},
+  OR:{group:"Oregon", name:"State of Oregon", domain:"data.oregon.gov", id:"y9g9-xsxs", vendor:"vendor", amount:"expense", fy:"fiscal_year", agency:"agency_1", category:"expend_class_1", portal:"https://www.oregon.gov/transparency/Pages/Checkbook.aspx"},
+  VT:{group:"Vermont", name:"State of Vermont", domain:"data.vermont.gov", id:"p5kg-p2h8", vendor:"vendor", amount:"amt", fyExpr:"date_extract_y(qtrending)", agency:"govtunit", category:"account", desc:"description", date:"qtrending", portal:"https://spotlight.vermont.gov/"}
 };
 
 let REPORT=null, CHARTS={};
@@ -184,7 +186,9 @@ function fyCol(c){return c.fyExpr||c.fy;}
 async function soql(c,q){const url="https://"+c.domain+"/resource/"+c.id+".json?"+q;const r=await fetch(url);if(!r.ok)throw new Error(c.name+" API HTTP "+r.status);return r.json();}
 
 (function(){
-  const sel=$("#state"); Object.keys(STATES).forEach(k=>sel.add(new Option(STATES[k].name+" ("+k+")",k)));
+  const sel=$("#state"); const groups={};
+  Object.keys(STATES).forEach(k=>{const g=STATES[k].group||"Other";(groups[g]=groups[g]||[]).push(k);});
+  Object.keys(groups).forEach(g=>{const og=document.createElement("optgroup");og.label=g;groups[g].forEach(k=>og.appendChild(new Option(STATES[k].name,k)));sel.appendChild(og);});
   sel.value="MD"; sel.onchange=onState;
   $("#run").onclick=run; $("#reset").onclick=()=>location.reload();
   document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));t.classList.add("active");$('.panel[data-p="'+t.dataset.p+'"]').classList.add("active");});
@@ -192,7 +196,8 @@ async function soql(c,q){const url="https://"+c.domain+"/resource/"+c.id+".json?
 })();
 
 async function onState(){
-  const c=cfg(); $("#srcHint").innerHTML='Live from <a href="'+c.portal+'" target="_blank" rel="noopener">'+c.name+'’s open data</a>.';
+  const c=cfg(); $("#srcHint").innerHTML='Live from <a href="'+c.portal+'" target="_blank" rel="noopener">'+esc(c.name)+' open data</a>.'+(c.note?' <em>'+esc(c.note)+'</em>':'');
+  var af=document.querySelector("#agency").closest(".field"); if(af){af.style.display=c.agency?"":"none"; if(!c.agency)document.querySelector("#agency").value="";}
   const fyS=$("#fyStart"),fyE=$("#fyEnd"); fyS.innerHTML="";fyE.innerHTML="";
   try{
     const fyc=fyCol(c);
@@ -208,7 +213,7 @@ function buildWhere(c,m){
   const w=[]; const fyc=fyCol(c);
   if(m.fyLo&&m.fyHi){ if(c.fyExpr) w.push(fyc+" between "+(+m.fyLo)+" and "+(+m.fyHi)); else w.push(fyc+" between '"+m.fyLo+"' and '"+m.fyHi+"'"); }
   if(m.vendor) w.push("upper("+c.vendor+") like upper('%"+sq(m.vendor)+"%')");
-  if(m.agency) w.push("upper("+c.agency+") like upper('%"+sq(m.agency)+"%')");
+  if(m.agency&&c.agency) w.push("upper("+c.agency+") like upper('%"+sq(m.agency)+"%')");
   return w.length?w.join(" AND "):"";
 }
 function whereParam(w){return w?"&$where="+encodeURIComponent(w):"";}
@@ -225,7 +230,7 @@ async function run(){
       soql(c,"$select="+A("sum("+amt+") as t, count(*) as n")+wp),
       soql(c,"$select="+A(fyc+" as fy, sum("+amt+") as t")+"&$group="+A(fyc)+"&$order="+A(fyc)+wp+"&$limit=60"),
       soql(c,"$select="+A(ven+" as name, sum("+amt+") as t, count(*) as n")+"&$group="+A(ven)+"&$order="+A("sum("+amt+") DESC")+"&$limit=25"+wp),
-      soql(c,"$select="+A(c.agency+" as name, sum("+amt+") as t")+"&$group="+A(c.agency)+"&$order="+A("sum("+amt+") DESC")+"&$limit=20"+wp),
+      c.agency?soql(c,"$select="+A(c.agency+" as name, sum("+amt+") as t")+"&$group="+A(c.agency)+"&$order="+A("sum("+amt+") DESC")+"&$limit=20"+wp):Promise.resolve([]),
       c.category?soql(c,"$select="+A(c.category+" as name, sum("+amt+") as t")+"&$group="+A(c.category)+"&$order="+A("sum("+amt+") DESC")+"&$limit=20"+wp):Promise.resolve([]),
       soql(c,txSelect(c)+"&$order="+A(amt+" DESC")+"&$limit=50"+wp)
     ]);
@@ -243,7 +248,8 @@ async function run(){
   finally{ $("#run").disabled=false; }
 }
 function txSelect(c){
-  const cols=[c.vendor+" as vendor",c.amount+" as amount",c.agency+" as agency"];
+  const cols=[c.vendor+" as vendor",c.amount+" as amount"];
+  if(c.agency)cols.push(c.agency+" as agency");
   if(c.category)cols.push(c.category+" as category");
   if(c.desc)cols.push(c.desc+" as descr");
   if(c.date)cols.push(c.date+" as dt");
@@ -285,14 +291,15 @@ function render(R){
   bar("ovTrend",R.byYear.map(r=>"FY"+r.fy),R.byYear.map(r=>r.t),"var(--obl)",false);
   bar("rcChart",R.vendors.slice(0,15).map(v=>v.name),R.vendors.slice(0,15).map(v=>v.t),"var(--paid)",true);
   $("#rcTable").innerHTML=tbl(["Recipient","Total","Payments","% of shown"],R.vendors.map(v=>[esc(v.name||"—"),fmt(v.t),(v.n||"").toLocaleString?v.n.toLocaleString():v.n,pct(v.t/(R.vendors.reduce((s,x)=>s+x.t,0)||1))]),[0,1,1,1]);
-  bar("agChart",R.agencies.slice(0,12).map(a=>a.name),R.agencies.slice(0,12).map(a=>a.t),"var(--obl)",true);
-  $("#agTable").innerHTML=tbl(["Agency","Total"],R.agencies.map(a=>[esc(a.name||"—"),fmt(a.t)]),[0,1]);
+  if(R.agencies.length){bar("agChart",R.agencies.slice(0,12).map(a=>a.name),R.agencies.slice(0,12).map(a=>a.t),"var(--obl)",true);
+    $("#agTable").innerHTML=tbl(["Agency","Total"],R.agencies.map(a=>[esc(a.name||"—"),fmt(a.t)]),[0,1]);}
+  else{destroy("agChart");$("#agTable").innerHTML="<tbody><tr><td>This dataset does not break spending out by agency/department.</td></tr></tbody>";}
   if(R.cats.length){bar("caChart",R.cats.slice(0,12).map(a=>a.name),R.cats.slice(0,12).map(a=>a.t),"var(--gold)",true);
     $("#caTable").innerHTML=tbl(["Category","Total"],R.cats.map(a=>[esc(a.name||"—"),fmt(a.t)]),[0,1]);}
   else{$("#caTable").innerHTML="<tbody><tr><td>No category field for this state.</td></tr></tbody>";destroy("caChart");}
 
-  const txcols=["Recipient","Agency"]; if(R.c.category)txcols.push("Category"); if(R.c.date)txcols.push("Date"); txcols.push("Amount");
-  $("#txTable").innerHTML=tbl(txcols, R.tx.map(t=>{const row=[esc(t.vendor||"—"),esc(t.agency||"")]; if(R.c.category)row.push(esc(t.category||"")); if(R.c.date)row.push(esc(String(t.dt||"").slice(0,10))); row.push(fmt(t.amount)); return row;}), txcols.map((h,i)=>i===txcols.length-1?1:0));
+  const txcols=["Recipient"]; if(R.c.agency)txcols.push("Agency"); if(R.c.category)txcols.push("Category"); if(R.c.date)txcols.push("Date"); txcols.push("Amount");
+  $("#txTable").innerHTML=tbl(txcols, R.tx.map(t=>{const row=[esc(t.vendor||"—")]; if(R.c.agency)row.push(esc(t.agency||"")); if(R.c.category)row.push(esc(t.category||"")); if(R.c.date)row.push(esc(String(t.dt||"").slice(0,10))); row.push(fmt(t.amount)); return row;}), txcols.map((h,i)=>i===txcols.length-1?1:0));
 
   $("#flagList").innerHTML=R.flags.map(f=>`<div class="flag ${f.sev}"><div class="ft"><span class="sev ${f.sev}">${f.sev}</span> ${esc(f.title)}</div><div class="fd">${f.desc}</div></div>`).join("");
   $("#srcFoot").innerHTML="Source: "+esc(c.name)+" — <a href='"+c.portal+"' target='_blank' rel='noopener'>"+esc(c.portal)+"</a> (Socrata dataset "+esc(c.id)+").";
