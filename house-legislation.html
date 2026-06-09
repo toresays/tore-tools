@@ -380,12 +380,12 @@ async function search(append){
       STATE.mode="member";
       const j=await getJSON(API+"/member/"+member.id+"/sponsored-legislation?limit=250");
       raw=(j.sponsoredLegislation||[]).filter(b=>String(b.type).toLowerCase()===type&&String(b.congress)===String(CONGRESS))
-        .map(b=>({type:b.type,number:b.number,title:b.title,latest:b.latestAction,introduced:b.introducedDate,
+        .map(b=>({type:String(b.type||"").toLowerCase(),number:b.number,title:b.title,latest:b.latestAction,introduced:b.introducedDate,
                   sponsorName:member.name,party:member.party,policy:(b.policyArea||{}).name||""}));
     }else{
       STATE.mode="list";
       const j=await getJSON(API+"/bill/"+CONGRESS+"/"+type+"?limit="+PAGE+"&offset="+STATE.offset+"&sort=updateDate+desc");
-      raw=(j.bills||[]).map(b=>({type:b.type,number:b.number,title:b.title,latest:b.latestAction,
+      raw=(j.bills||[]).map(b=>({type:String(b.type||"").toLowerCase(),number:b.number,title:b.title,latest:b.latestAction,
                   introduced:b.introducedDate||"",sponsorName:null,party:null,policy:""}));
       STATE.total=j.pagination?j.pagination.count:raw.length;
     }
@@ -465,7 +465,7 @@ async function billDetail(type,number){
 }
 let CURRENT=null;
 function openBill(ref){
-  CURRENT={type:ref.type,number:ref.number,text:null,plain:null};
+  CURRENT={type:String(ref.type||"").toLowerCase(),number:ref.number,text:null,plain:null};
   $("#overlay").classList.add("open");$("#drawer").classList.add("open");
   document.querySelector('.dtab[data-d="ov"]').click();
   $("#dNum").textContent=typeLabel(ref.type)+" "+ref.number+" · "+CONGRESS+"th Congress";
@@ -616,8 +616,10 @@ function prepAnalyzer(d){
       if(fmt)opts+='<option value="'+esc(fmt.url)+'">'+esc(v.type||("Version "+(i+1)))+' · '+esc(fmtDate(v.date))+'</option>';
     });
     p.innerHTML='<div class="toolbar"><div class="field" style="min-width:280px"><label>Text version to analyze</label><select id="verSel">'+opts+'</select></div>'
-      +'<button class="primary" onclick="runAnalyzer()" style="align-self:flex-end">Analyze this text</button></div>'
-      +'<div id="anOut"><p class="hint">Pick a version and click <b>Analyze</b>. The detector reads the actual bill text in your browser and highlights language worth a closer look.</p></div>';
+      +'<button class="ghost" onclick="runAnalyzer()" style="align-self:flex-end">Re-analyze</button></div>'
+      +'<div id="anOut"><p class="hint"><span class="spin"></span>Reading the bill text and scanning&hellip;</p></div>';
+    $("#verSel").onchange=runAnalyzer;
+    runAnalyzer();
   }).catch(e=>{p.innerHTML='<p class="err">'+esc(e.message)+"</p>";});
 }
 
@@ -746,7 +748,7 @@ async function loadWeek(){
   try{
     const j=await getJSON(API+"/bill/"+CONGRESS+"/hr?limit=80&sort=updateDate+desc");
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-16);
-    const items=(j.bills||[]).map(b=>({type:b.type,number:b.number,title:b.title,latest:b.latestAction,introduced:b.introducedDate||"",stage:stageOf((b.latestAction||{}).text)}))
+    const items=(j.bills||[]).map(b=>({type:String(b.type||"").toLowerCase(),number:b.number,title:b.title,latest:b.latestAction,introduced:b.introducedDate||"",stage:stageOf((b.latestAction||{}).text)}))
       .filter(b=>{const la=b.latest||{};return la.actionDate&&new Date(la.actionDate)>=cutoff;})
       .filter(b=>b.stage>=2||/passed|reported|rules committee|calendar|presented|became/i.test((b.latest||{}).text||""));
     wl.innerHTML=items.length?items.map(billRow).join(""):'<p class="hint">No major floor movement in the last two weeks.</p>';
