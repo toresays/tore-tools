@@ -252,7 +252,7 @@
 const CONGRESS = 119;                       // current Congress
 const API = "https://api.congress.gov/v3";
 const EMBEDDED_KEY = "1jpQmTYQPgGtYEC0jjxgSIE6Gg3EwIGmUcKOuvOX"; // api.congress.gov key (20k req/hr). Users can override via the ⚙ button.
-const AI_WORKER_URL = "";                   // ← set to your Cloudflare Worker URL to enable the Claude deep-dive
+const AI_WORKER_URL = "https://read-the-bills-ai.toresays.workers.dev"; // Cloudflare Worker holding the Anthropic key
 const PAGE = 40;                            // bills per page in browse mode
 
 let API_KEY = localStorage.getItem("tore_congress_key") || EMBEDDED_KEY;
@@ -720,8 +720,12 @@ async function runAI(){
       textSample:(CURRENT.plain||"").slice(0,18000)
     };
     const r=await fetch(AI_WORKER_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(!r.ok)throw new Error("AI service error (HTTP "+r.status+").");
-    const j=await r.json();
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error){
+      let msg=j.error||("AI service error (HTTP "+r.status+")");
+      try{var dd=JSON.parse(j.detail);if(dd&&dd.error&&dd.error.message)msg=dd.error.message;}catch(e){}
+      throw new Error(msg);
+    }
     const a=j.analysis||j;
     let h='<div class="ai-out">';
     if(a.plainSummary){h+='<h4>In plain English</h4><p>'+esc(a.plainSummary)+'</p>';}
